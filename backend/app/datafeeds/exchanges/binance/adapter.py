@@ -5,7 +5,7 @@ Binance 统一适配器模块。
 
 上层调用方只需与此适配器交互，无需关心底层是通过 REST 还是 WebSocket 获取数据。
 """
-from typing import Callable, Dict, List
+from typing import Any, Callable, Dict, List, Optional
 
 from loguru import logger
 
@@ -13,9 +13,12 @@ from app.core.config import settings
 from app.core.enums import MarketType
 from app.datafeeds.base import BaseExchangeAdapter
 from app.datafeeds.exchanges.binance.parser import (
+    parse_rest_agg_trades,
     parse_rest_funding,
+    parse_rest_funding_rate_history,
     parse_rest_klines,
     parse_rest_open_interest,
+    parse_rest_open_interest_history,
     parse_rest_orderbook,
     parse_rest_ticker,
 )
@@ -317,3 +320,152 @@ class BinanceAdapter(BaseExchangeAdapter):
             "open_interest": str(unified_oi.open_interest),
             "event_time": unified_oi.event_time.isoformat(),
         }
+
+    async def get_spot_agg_trades_history(
+        self,
+        symbol: str,
+        start_time: int,
+        end_time: int,
+        limit: int = 500,
+        use_proxy: bool = False,
+    ) -> List[Dict[str, Any]]:
+        """
+        Fetch historical spot aggregate trades and return normalized dict rows.
+
+        Args:
+            symbol: Trading pair.
+            start_time: Window start (ms).
+            end_time: Window end (ms).
+            limit: Max trades per request (capped by Binance).
+            use_proxy: Forwarded to REST client when proxy env vars are set.
+
+        Returns:
+            List of serializable trade dictionaries.
+        """
+        raw = await self._rest_client.get_spot_agg_trades(
+            symbol,
+            start_time=start_time,
+            end_time=end_time,
+            limit=limit,
+            use_proxy=use_proxy,
+        )
+        trades = parse_rest_agg_trades(raw, "binance", symbol, "spot")
+        return [
+            {
+                "exchange": t.exchange,
+                "symbol": t.symbol,
+                "market_type": t.market_type,
+                "trade_id": t.trade_id,
+                "price": str(t.price),
+                "quantity": str(t.quantity),
+                "side": t.side,
+                "event_time": t.event_time.isoformat(),
+            }
+            for t in trades
+        ]
+
+    async def get_futures_agg_trades_history(
+        self,
+        symbol: str,
+        start_time: int,
+        end_time: int,
+        limit: int = 500,
+        use_proxy: bool = False,
+    ) -> List[Dict[str, Any]]:
+        """
+        Fetch historical USDT-M futures aggregate trades as normalized dict rows.
+
+        Args:
+            symbol: Trading pair.
+            start_time: Window start (ms).
+            end_time: Window end (ms).
+            limit: Max trades per request.
+            use_proxy: Forwarded to REST client when proxy env vars are set.
+
+        Returns:
+            List of serializable trade dictionaries.
+        """
+        raw = await self._rest_client.get_futures_agg_trades(
+            symbol,
+            start_time=start_time,
+            end_time=end_time,
+            limit=limit,
+            use_proxy=use_proxy,
+        )
+        trades = parse_rest_agg_trades(raw, "binance", symbol, "perp")
+        return [
+            {
+                "exchange": t.exchange,
+                "symbol": t.symbol,
+                "market_type": t.market_type,
+                "trade_id": t.trade_id,
+                "price": str(t.price),
+                "quantity": str(t.quantity),
+                "side": t.side,
+                "event_time": t.event_time.isoformat(),
+            }
+            for t in trades
+        ]
+
+    async def get_funding_rate_history(
+        self,
+        symbol: str,
+        start_time: int,
+        end_time: int,
+        limit: int = 500,
+        use_proxy: bool = False,
+    ) -> List[Dict[str, Any]]:
+        """
+        Fetch historical funding rates for a perpetual symbol.
+
+        Args:
+            symbol: Trading pair.
+            start_time: Window start (ms).
+            end_time: Window end (ms).
+            limit: Max rows per request.
+            use_proxy: Forwarded to REST client when proxy env vars are set.
+
+        Returns:
+            List of normalized funding rate dicts.
+        """
+        raw = await self._rest_client.get_funding_rate_history(
+            symbol,
+            start_time=start_time,
+            end_time=end_time,
+            limit=limit,
+            use_proxy=use_proxy,
+        )
+        return parse_rest_funding_rate_history(raw, "binance")
+
+    async def get_open_interest_history(
+        self,
+        symbol: str,
+        period: str,
+        start_time: Optional[int] = None,
+        end_time: Optional[int] = None,
+        limit: int = 500,
+        use_proxy: bool = False,
+    ) -> List[Dict[str, Any]]:
+        """
+        Fetch historical open interest statistics (aggregated by ``period``).
+
+        Args:
+            symbol: Trading pair.
+            period: Binance aggregation window (e.g. ``1h``, ``1d``).
+            start_time: Window start (ms), optional.
+            end_time: Window end (ms), optional.
+            limit: Max rows per request.
+            use_proxy: Forwarded to REST client when proxy env vars are set.
+
+        Returns:
+            List of normalized open interest history dicts.
+        """
+        raw = await self._rest_client.get_open_interest_history(
+            symbol,
+            period=period,
+            start_time=start_time,
+            end_time=end_time,
+            limit=limit,
+            use_proxy=use_proxy,
+        )
+        return parse_rest_open_interest_history(raw, "binance")

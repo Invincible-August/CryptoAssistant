@@ -7,6 +7,7 @@ Binance REST API 客户端模块。
 不会触发 Binance 的 HTTP 429 限频。
 """
 import asyncio
+import os
 from typing import Any, Dict, List, Optional
 
 import httpx
@@ -112,6 +113,7 @@ class BinanceRestClient:
         base_url: str,
         path: str,
         params: Optional[Dict[str, Any]] = None,
+        use_proxy: bool = False,
     ) -> Any:
         """
         底层 HTTP 请求封装，内置重试和限频处理。
@@ -124,6 +126,8 @@ class BinanceRestClient:
             base_url: API 基础地址
             path: 接口路径（如 "/api/v3/klines"）
             params: 查询参数字典
+            use_proxy: 为 True 时，若环境变量 ``HTTPS_PROXY`` 或 ``HTTP_PROXY`` 已设置，
+                则对该请求使用该代理（便于在受限网络下抓取历史数据）。
 
         Returns:
             接口返回的 JSON 数据
@@ -138,11 +142,18 @@ class BinanceRestClient:
         url = f"{base_url}{path}"
         current_retry_delay = self._base_retry_delay
 
+        # 仅在显式要求且环境变量存在时注入代理，避免与默认 httpx 行为混淆
+        request_proxy: Optional[str] = None
+        if use_proxy:
+            request_proxy = os.getenv("HTTPS_PROXY") or os.getenv("HTTP_PROXY")
+
+        request_kwargs: Dict[str, Any] = {"params": params}
+        if request_proxy:
+            request_kwargs["proxy"] = request_proxy
+
         for attempt in range(1, self._max_retries + 1):
             try:
-                response = await self._client.request(
-                    method, url, params=params
-                )
+                response = await self._client.request(method, url, **request_kwargs)
 
                 # 请求成功
                 if response.status_code == 200:
@@ -293,6 +304,51 @@ class BinanceRestClient:
             "GET", self._spot_base_url, "/api/v3/depth", params
         )
 
+    async def get_spot_agg_trades(
+        self,
+        symbol: str,
+        start_time: Optional[int] = None,
+        end_time: Optional[int] = None,
+        limit: int = 500,
+        use_proxy: bool = False,
+    ) -> List[Dict[str, Any]]:
+        """
+        Fetch historical compressed (aggregate) trades for the spot market.
+
+        GET ``/api/v3/aggTrades`` — used for market import backfills.
+
+        Args:
+            symbol: Trading pair (e.g. "BTCUSDT").
+            start_time: Inclusive start time in milliseconds (optional).
+            end_time: Exclusive end time in milliseconds (optional).
+            limit: Max rows per request (capped at 1000 per Binance).
+            use_proxy: When True and ``HTTPS_PROXY``/``HTTP_PROXY`` is set, use
+                that proxy for this request.
+
+        Returns:
+            Raw JSON list of aggregate trade objects.
+        """
+        params: Dict[str, Any] = {
+            "symbol": symbol,
+            "limit": min(max(limit, 1), 1000),
+        }
+        if start_time is not None:
+            params["startTime"] = start_time
+        if end_time is not None:
+            params["endTime"] = end_time
+
+        logger.debug(
+            f"获取现货聚合成交历史: {symbol} limit={params['limit']} "
+            f"start={start_time} end={end_time}"
+        )
+        return await self._request(
+            "GET",
+            self._spot_base_url,
+            "/api/v3/aggTrades",
+            params,
+            use_proxy=use_proxy,
+        )
+
     # ==============================================================================
     # 合约 API
     # ==============================================================================
@@ -368,6 +424,50 @@ class BinanceRestClient:
             "GET", self._futures_base_url, "/fapi/v1/depth", params
         )
 
+    async def get_futures_agg_trades(
+        self,
+        symbol: str,
+        start_time: Optional[int] = None,
+        end_time: Optional[int] = None,
+        limit: int = 500,
+        use_proxy: bool = False,
+    ) -> List[Dict[str, Any]]:
+        """
+        Fetch historical compressed (aggregate) trades for USDT-M futures.
+
+        GET ``/fapi/v1/aggTrades`` — used for market import backfills.
+
+        Args:
+            symbol: Trading pair (e.g. "BTCUSDT").
+            start_time: Inclusive start time in milliseconds (optional).
+            end_time: Exclusive end time in milliseconds (optional).
+            limit: Max rows per request (capped at 1000 per Binance).
+            use_proxy: When True and proxy env vars are set, use proxy for this request.
+
+        Returns:
+            Raw JSON list of aggregate trade objects.
+        """
+        params: Dict[str, Any] = {
+            "symbol": symbol,
+            "limit": min(max(limit, 1), 1000),
+        }
+        if start_time is not None:
+            params["startTime"] = start_time
+        if end_time is not None:
+            params["endTime"] = end_time
+
+        logger.debug(
+            f"获取合约聚合成交历史: {symbol} limit={params['limit']} "
+            f"start={start_time} end={end_time}"
+        )
+        return await self._request(
+            "GET",
+            self._futures_base_url,
+            "/fapi/v1/aggTrades",
+            params,
+            use_proxy=use_proxy,
+        )
+
     async def get_funding_rate(self, symbol: str) -> Dict:
         """
         获取永续合约最新资金费率。
@@ -399,4 +499,98 @@ class BinanceRestClient:
         logger.debug(f"获取持仓量: {symbol}")
         return await self._request(
             "GET", self._futures_base_url, "/fapi/v1/openInterest", params
+        )
+
+    async def get_funding_rate_history(
+        self,
+        symbol: str,
+        start_time: Optional[int] = None,
+        end_time: Optional[int] = None,
+        limit: int = 500,
+        use_proxy: bool = False,
+    ) -> List[Dict[str, Any]]:
+        """
+        Fetch historical funding rates for a perpetual futures symbol.
+
+        GET ``/fapi/v1/fundingRate`` — returns funding snapshots in the
+        requested time window.
+
+        Args:
+            symbol: Trading pair (e.g. "BTCUSDT").
+            start_time: Start time in milliseconds (optional).
+            end_time: End time in milliseconds (optional).
+            limit: Max rows (capped at 1000 per Binance).
+            use_proxy: When True and proxy env vars are set, use proxy for this request.
+
+        Returns:
+            Raw JSON list of funding rate objects.
+        """
+        params: Dict[str, Any] = {
+            "symbol": symbol,
+            "limit": min(max(limit, 1), 1000),
+        }
+        if start_time is not None:
+            params["startTime"] = start_time
+        if end_time is not None:
+            params["endTime"] = end_time
+
+        logger.debug(
+            f"获取资金费率历史: {symbol} limit={params['limit']} "
+            f"start={start_time} end={end_time}"
+        )
+        return await self._request(
+            "GET",
+            self._futures_base_url,
+            "/fapi/v1/fundingRate",
+            params,
+            use_proxy=use_proxy,
+        )
+
+    async def get_open_interest_history(
+        self,
+        symbol: str,
+        period: str,
+        start_time: Optional[int] = None,
+        end_time: Optional[int] = None,
+        limit: int = 500,
+        use_proxy: bool = False,
+    ) -> List[Dict[str, Any]]:
+        """
+        Fetch historical open interest statistics (contract-level).
+
+        GET ``/futures/data/openInterestHist`` on the futures REST host (same
+        base URL as ``/fapi/v1/...``). ``period`` must be one of Binance-supported
+        values (e.g. ``5m``, ``1h``, ``1d``).
+
+        Args:
+            symbol: Trading pair (e.g. "BTCUSDT").
+            period: Aggregation period (Binance: 5m, 15m, 30m, 1h, 2h, 4h, 6h, 12h, 1d).
+            start_time: Start time in milliseconds (optional).
+            end_time: End time in milliseconds (optional).
+            limit: Max rows (default 500; cap per Binance docs).
+            use_proxy: When True and proxy env vars are set, use proxy for this request.
+
+        Returns:
+            Raw JSON list of open interest history objects.
+        """
+        params: Dict[str, Any] = {
+            "symbol": symbol,
+            "period": period,
+            "limit": min(max(limit, 1), 500),
+        }
+        if start_time is not None:
+            params["startTime"] = start_time
+        if end_time is not None:
+            params["endTime"] = end_time
+
+        logger.debug(
+            f"获取持仓量历史: {symbol} period={period} limit={params['limit']} "
+            f"start={start_time} end={end_time}"
+        )
+        return await self._request(
+            "GET",
+            self._futures_base_url,
+            "/futures/data/openInterestHist",
+            params,
+            use_proxy=use_proxy,
         )

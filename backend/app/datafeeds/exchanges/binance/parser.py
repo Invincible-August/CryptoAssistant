@@ -201,6 +201,145 @@ def parse_rest_funding(raw: Dict, exchange: str) -> UnifiedFunding:
     )
 
 
+def parse_rest_agg_trade(
+    raw: Dict[str, Any], exchange: str, symbol: str, market_type: str
+) -> UnifiedTrade:
+    """
+    Parse one object from Binance REST ``aggTrades`` response.
+
+    REST aggregate trade fields: ``a`` (agg id), ``p``, ``q``, ``T``, ``m``, etc.
+
+    Args:
+        raw: Single aggregate trade dictionary from Binance REST JSON.
+        exchange: Exchange identifier.
+        symbol: Trading pair (response may omit symbol; caller supplies it).
+        market_type: ``spot`` or ``perp``.
+
+    Returns:
+        UnifiedTrade normalized row.
+    """
+    trade_id = str(raw.get("a", ""))
+    is_buyer_maker = raw.get("m", False)
+    side = "sell" if is_buyer_maker else "buy"
+
+    return UnifiedTrade(
+        exchange=exchange,
+        symbol=symbol,
+        market_type=market_type,
+        trade_id=trade_id,
+        price=_to_decimal(raw.get("p", "0")),
+        quantity=_to_decimal(raw.get("q", "0")),
+        side=side,
+        event_time=_ms_to_datetime(raw.get("T", 0)),
+    )
+
+
+def parse_rest_agg_trades(
+    raw_list: List[Dict[str, Any]],
+    exchange: str,
+    symbol: str,
+    market_type: str,
+) -> List[UnifiedTrade]:
+    """
+    Parse full ``aggTrades`` REST array into unified trades.
+
+    Args:
+        raw_list: List of aggregate trade dicts from Binance.
+        exchange: Exchange identifier.
+        symbol: Trading pair.
+        market_type: ``spot`` or ``perp``.
+
+    Returns:
+        List of UnifiedTrade instances.
+    """
+    return [
+        parse_rest_agg_trade(row, exchange, symbol, market_type) for row in raw_list
+    ]
+
+
+def parse_rest_funding_rate_history_row(
+    raw: Dict[str, Any], exchange: str
+) -> Dict[str, Any]:
+    """
+    Normalize one row from ``/fapi/v1/fundingRate`` history response.
+
+    Args:
+        raw: Single funding rate object from Binance.
+        exchange: Exchange identifier.
+
+    Returns:
+        JSON-serializable dict with decimal fields as strings.
+    """
+    return {
+        "exchange": exchange,
+        "symbol": raw.get("symbol", ""),
+        "funding_rate": str(_to_decimal(raw.get("fundingRate", "0"))),
+        "funding_time": _ms_to_datetime(raw.get("fundingTime", 0)).isoformat(),
+    }
+
+
+def parse_rest_open_interest_hist_row(
+    raw: Dict[str, Any], exchange: str
+) -> Dict[str, Any]:
+    """
+    Normalize one row from ``/futures/data/openInterestHist`` response.
+
+    Args:
+        raw: Single history object (``sumOpenInterest``, ``timestamp``, ...).
+        exchange: Exchange identifier.
+
+    Returns:
+        JSON-serializable dict including ``open_interest_value`` when present.
+    """
+    ts = int(raw.get("timestamp", 0) or 0)
+    return {
+        "exchange": exchange,
+        "symbol": raw.get("symbol", ""),
+        "market_type": "perp",
+        "open_interest": str(_to_decimal(raw.get("sumOpenInterest", "0"))),
+        "open_interest_value": str(
+            _to_decimal(raw.get("sumOpenInterestValue", "0"))
+        ),
+        "event_time": _ms_to_datetime(ts).isoformat(),
+    }
+
+
+def parse_rest_funding_rate_history(
+    raw_list: List[Dict[str, Any]], exchange: str
+) -> List[Dict[str, Any]]:
+    """
+    Parse full funding rate history array into normalized dict rows.
+
+    Args:
+        raw_list: Response body from ``/fapi/v1/fundingRate``.
+        exchange: Exchange identifier.
+
+    Returns:
+        List of JSON-serializable dicts.
+    """
+    return [
+        parse_rest_funding_rate_history_row(row, exchange) for row in raw_list
+    ]
+
+
+def parse_rest_open_interest_history(
+    raw_list: List[Dict[str, Any]], exchange: str
+) -> List[Dict[str, Any]]:
+    """
+    Parse full open interest history array into normalized dict rows.
+
+    Args:
+        raw_list: Response body from ``/futures/data/openInterestHist``.
+        exchange: Exchange identifier.
+
+    Returns:
+        List of JSON-serializable dicts.
+    """
+    return [
+        parse_rest_open_interest_hist_row(row, exchange) for row in raw_list
+    ]
+
+
 def parse_rest_open_interest(
     raw: Dict, exchange: str, symbol: str
 ) -> UnifiedOI:

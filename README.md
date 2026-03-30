@@ -43,6 +43,8 @@ copy .env.example .env
 # 编辑 .env 文件，确保数据库连接信息正确
 ```
 
+可选：若需在受限网络下通过代理拉取 Binance 历史行情（REST 层 `use_proxy=True`），可设置系统环境变量 `HTTPS_PROXY` 或 `HTTP_PROXY`。
+
 ### 3. 初始化数据库
 
 安装 PostgreSQL 后创建数据库：

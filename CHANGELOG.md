@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+### 新增
+
+- **Binance 行情导入 REST 历史接口**：`BinanceRestClient` 增加现货/合约聚合成交历史（`/api/v3/aggTrades`、`/fapi/v1/aggTrades`）、资金费率历史（`/fapi/v1/fundingRate`）、持仓量历史（`/futures/data/openInterestHist`）；`_request` 支持 `use_proxy=True` 时在设置了 `HTTPS_PROXY`/`HTTP_PROXY` 的情况下对该请求走代理。`BinanceAdapter` 提供对应高层方法与解析（`parser.py` 中聚合成交与资金/OI 历史行规范化）。单元测试见 `tests/backend/unit/test_binance_rest_market_import.py`（monkeypatch `_request` / AsyncMock httpx，无网络）。
+
 ### 变更
 
 - **行情导入 API 契约**：`MarketImportCreateRequest` 不再包含 `created_by` / `status`（由服务端从认证与默认值写入）；`MarketImportTaskResponse` 仍返回二者。
