@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from app.core.config import settings
 from app.datafeeds.exchanges.binance.rest_client import (
     BinanceRestClient,
     _FUTURES_BASE_URL,
@@ -205,3 +206,83 @@ async def test_request_passes_proxy_when_use_proxy_and_env_set(
     mock_request.assert_awaited_once()
     _args, kwargs = mock_request.call_args
     assert kwargs.get("proxy") == "http://127.0.0.1:8888"
+
+
+@pytest.mark.asyncio
+async def test_request_prefers_settings_binance_proxy_url_when_enabled(
+    monkeypatch: pytest.MonkeyPatch, rest_client: BinanceRestClient
+) -> None:
+    """When BINANCE_PROXY_ENABLED and BINANCE_PROXY_URL are set, use URL without env."""
+
+    monkeypatch.delenv("HTTPS_PROXY", raising=False)
+    monkeypatch.delenv("HTTP_PROXY", raising=False)
+    monkeypatch.setattr(settings, "BINANCE_PROXY_ENABLED", True, raising=False)
+    monkeypatch.setattr(
+        settings,
+        "BINANCE_PROXY_URL",
+        "http://proxy-from-settings.example:3128",
+        raising=False,
+    )
+
+    class FakeResponse:
+        status_code = 200
+
+        def json(self):
+            return {"ok": True}
+
+    mock_request = AsyncMock(return_value=FakeResponse())
+
+    await rest_client.init()
+    assert rest_client._client is not None
+    monkeypatch.setattr(rest_client._client, "request", mock_request)
+
+    await rest_client._request(
+        "GET",
+        _SPOT_BASE_URL,
+        "/api/v3/ping",
+        params=None,
+        use_proxy=True,
+    )
+
+    mock_request.assert_awaited_once()
+    _args, kwargs = mock_request.call_args
+    assert kwargs.get("proxy") == "http://proxy-from-settings.example:3128"
+
+
+@pytest.mark.asyncio
+async def test_request_settings_proxy_wins_over_env_when_both_set(
+    monkeypatch: pytest.MonkeyPatch, rest_client: BinanceRestClient
+) -> None:
+    """App proxy URL takes precedence over HTTPS_PROXY when enabled."""
+
+    monkeypatch.setenv("HTTPS_PROXY", "http://127.0.0.1:8888")
+    monkeypatch.setattr(settings, "BINANCE_PROXY_ENABLED", True, raising=False)
+    monkeypatch.setattr(
+        settings,
+        "BINANCE_PROXY_URL",
+        "http://preferred.example:8080",
+        raising=False,
+    )
+
+    class FakeResponse:
+        status_code = 200
+
+        def json(self):
+            return {"ok": True}
+
+    mock_request = AsyncMock(return_value=FakeResponse())
+
+    await rest_client.init()
+    assert rest_client._client is not None
+    monkeypatch.setattr(rest_client._client, "request", mock_request)
+
+    await rest_client._request(
+        "GET",
+        _SPOT_BASE_URL,
+        "/api/v3/ping",
+        params=None,
+        use_proxy=True,
+    )
+
+    _args, kwargs = mock_request.call_args
+    assert kwargs.get("proxy") == "http://preferred.example:8080"

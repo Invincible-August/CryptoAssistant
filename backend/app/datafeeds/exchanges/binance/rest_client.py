@@ -126,8 +126,12 @@ class BinanceRestClient:
             base_url: API 基础地址
             path: 接口路径（如 "/api/v3/klines"）
             params: 查询参数字典
-            use_proxy: 为 True 时，若环境变量 ``HTTPS_PROXY`` 或 ``HTTP_PROXY`` 已设置，
-                则对该请求使用该代理（便于在受限网络下抓取历史数据）。
+            use_proxy: 为 True 时，为该请求解析代理 URL（便于在受限网络下抓取历史数据）。
+                解析优先级（仅当 ``use_proxy=True`` 时生效）：
+                1. 若 ``settings.BINANCE_PROXY_ENABLED`` 为 True 且
+                   ``settings.BINANCE_PROXY_URL`` 非空，则使用该字符串；
+                2. 否则使用环境变量 ``HTTPS_PROXY``，再否则 ``HTTP_PROXY``。
+                当 ``BINANCE_PROXY_ENABLED`` 为 False 时，忽略应用内 URL，仅走环境变量。
 
         Returns:
             接口返回的 JSON 数据
@@ -142,10 +146,16 @@ class BinanceRestClient:
         url = f"{base_url}{path}"
         current_retry_delay = self._base_retry_delay
 
-        # 仅在显式要求且环境变量存在时注入代理，避免与默认 httpx 行为混淆
+        # use_proxy=True 时按优先级解析代理；与 httpx 默认 trust_env 解耦，避免隐式走系统代理
         request_proxy: Optional[str] = None
         if use_proxy:
-            request_proxy = os.getenv("HTTPS_PROXY") or os.getenv("HTTP_PROXY")
+            stripped_app_proxy = (settings.BINANCE_PROXY_URL or "").strip()
+            if settings.BINANCE_PROXY_ENABLED and stripped_app_proxy:
+                request_proxy = stripped_app_proxy
+            else:
+                request_proxy = (
+                    os.getenv("HTTPS_PROXY") or os.getenv("HTTP_PROXY")
+                )
 
         request_kwargs: Dict[str, Any] = {"params": params}
         if request_proxy:

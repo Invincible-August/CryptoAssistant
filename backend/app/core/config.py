@@ -32,6 +32,9 @@ class Settings(BaseSettings):
     BINANCE_API_KEY: str = ""
     BINANCE_API_SECRET: str = ""
     BINANCE_TESTNET: bool = True  # 默认使用测试网，生产环境需关闭
+    # 可选：REST 层 use_proxy=True 时，优先使用此处（需 BINANCE_PROXY_ENABLED=true）
+    BINANCE_PROXY_ENABLED: bool = False
+    BINANCE_PROXY_URL: str = ""
 
     # ==================== OpenAI配置 ====================
     OPENAI_API_KEY: str = ""
