@@ -1,12 +1,13 @@
 """
-持仓量模型。
-存储合约市场的全网持仓量（Open Interest）数据。
+Open interest ORM model.
+
+Stores open interest snapshots for futures markets.
 """
 
 from datetime import datetime
 from decimal import Decimal
 
-from sqlalchemy import BigInteger, String, DateTime, Numeric
+from sqlalchemy import BigInteger, String, DateTime, Numeric, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.sql import func
 
@@ -15,13 +16,23 @@ from app.core.database import Base
 
 class MarketOpenInterest(Base):
     """
-    持仓量表模型。
+    Open interest table.
 
-    记录某交易对在特定时刻的全网未平仓合约总量，
-    持仓量的增减能反映资金流入流出情况，是趋势确认的重要参考。
+    Each row represents an open interest measurement at a specific event time.
     """
 
     __tablename__ = "market_open_interests"
+
+    # ---- 表级约束 ----
+    __table_args__ = (
+        UniqueConstraint(
+            "exchange",
+            "symbol",
+            "market_type",
+            "event_time",
+            name="uq_open_interest_identity",
+        ),
+    )
 
     # ---- 主键 ----
     id: Mapped[int] = mapped_column(

@@ -1,12 +1,13 @@
 """
-资金费率模型。
-存储永续合约的资金费率历史数据。
+Funding rate ORM model.
+
+Stores perpetual futures funding rate history.
 """
 
 from datetime import datetime
 from decimal import Decimal
 
-from sqlalchemy import BigInteger, String, DateTime, Numeric
+from sqlalchemy import BigInteger, String, DateTime, Numeric, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.sql import func
 
@@ -15,14 +16,22 @@ from app.core.database import Base
 
 class MarketFunding(Base):
     """
-    资金费率表模型。
+    Funding rate table.
 
-    记录永续合约每个结算周期的资金费率，
-    正值表示多头付费给空头，负值则反之。
-    是判断市场多空情绪的重要辅助指标。
+    Each row represents a funding settlement for a symbol at a given funding time.
     """
 
     __tablename__ = "market_fundings"
+
+    # ---- 表级约束 ----
+    __table_args__ = (
+        UniqueConstraint(
+            "exchange",
+            "symbol",
+            "funding_time",
+            name="uq_funding_identity",
+        ),
+    )
 
     # ---- 主键 ----
     id: Mapped[int] = mapped_column(

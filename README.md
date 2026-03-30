@@ -54,6 +54,17 @@ copy .env.example .env
 CREATE DATABASE crypto_assistant;
 ```
 
+### 3.1 运行数据库迁移（Alembic）
+
+本项目使用 Alembic 管理 PostgreSQL schema 变更。首次部署或拉取包含迁移的新代码后，请在 `backend/` 目录执行：
+
+```bash
+cd backend
+alembic upgrade head
+```
+
+补充说明：为保证行情导入重复执行不产生重复落库，`market_trades`、`market_fundings`、`market_open_interests` 增加了数据库唯一约束，并在 `market_service` 写入路径使用 PostgreSQL `ON CONFLICT` 做幂等 upsert（详见 `CHANGELOG.md`）。
+
 ### 4. 启动 Redis
 
 ```bash

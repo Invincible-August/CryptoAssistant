@@ -13,6 +13,7 @@ from typing import Any, Dict, List, Optional
 
 from loguru import logger
 from sqlalchemy import select, and_, desc
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.redis import redis_manager
@@ -211,31 +212,66 @@ async def get_latest_klines(
 
 async def save_trade(db: AsyncSession, trade_data: Dict[str, Any]) -> MarketTrade:
     """
-    保存一笔成交数据到数据库。
+    Persist a single executed trade with idempotent semantics.
+
+    This uses PostgreSQL `INSERT ... ON CONFLICT DO NOTHING` on the unique identity
+    `(exchange, symbol, market_type, trade_id)`. If the trade already exists, the
+    existing row is returned.
 
     Args:
-        db: 异步数据库会话
-        trade_data: 成交数据字典
+        db: Async SQLAlchemy session.
+        trade_data: Trade payload dict compatible with `MarketTrade` columns.
 
     Returns:
-        MarketTrade 对象
+        The persisted (or already existing) `MarketTrade` ORM instance.
     """
-    trade = MarketTrade(
-        exchange=trade_data["exchange"],
-        symbol=trade_data["symbol"],
-        market_type=trade_data["market_type"],
-        trade_id=str(trade_data["trade_id"]),
-        price=Decimal(str(trade_data["price"])),
-        quantity=Decimal(str(trade_data["quantity"])),
-        side=trade_data["side"],
-        event_time=trade_data["event_time"],
+    exchange = trade_data["exchange"]
+    symbol = trade_data["symbol"]
+    market_type = trade_data["market_type"]
+    trade_id = str(trade_data["trade_id"])
+
+    # NOTE:
+    # - 交易所 trade_id 在同一市场内应当是稳定且不可变的，因此冲突时直接忽略即可（幂等写入）
+    stmt = (
+        pg_insert(MarketTrade)
+        .values(
+            exchange=exchange,
+            symbol=symbol,
+            market_type=market_type,
+            trade_id=trade_id,
+            price=Decimal(str(trade_data["price"])),
+            quantity=Decimal(str(trade_data["quantity"])),
+            side=trade_data["side"],
+            event_time=trade_data["event_time"],
+        )
+        .on_conflict_do_nothing(constraint="uq_trade_identity")
+        .returning(MarketTrade.id)
     )
 
-    db.add(trade)
-    await db.flush()
+    result = await db.execute(stmt)
+    inserted_pk = result.scalar_one_or_none()
+
+    if inserted_pk is None:
+        # 冲突：返回已存在的记录（保持函数返回语义不变）
+        existing_result = await db.execute(
+            select(MarketTrade).where(
+                and_(
+                    MarketTrade.exchange == exchange,
+                    MarketTrade.symbol == symbol,
+                    MarketTrade.market_type == market_type,
+                    MarketTrade.trade_id == trade_id,
+                )
+            )
+        )
+        trade = existing_result.scalar_one()
+    else:
+        trade_result = await db.execute(
+            select(MarketTrade).where(MarketTrade.id == inserted_pk)
+        )
+        trade = trade_result.scalar_one()
 
     logger.debug(
-        f"成交数据已保存: {trade.symbol} {trade.side} "
+        f"成交数据已保存(幂等): {trade.symbol} {trade.side} "
         f"{trade.quantity}@{trade.price}"
     )
     return trade
@@ -387,27 +423,51 @@ async def save_funding(
     db: AsyncSession, funding_data: Dict[str, Any]
 ) -> MarketFunding:
     """
-    保存资金费率数据到数据库。
+    Persist a funding rate snapshot with idempotent semantics.
+
+    This uses PostgreSQL `INSERT ... ON CONFLICT DO UPDATE` on the unique identity
+    `(exchange, symbol, funding_time)` to refresh `funding_rate` if the same funding
+    settlement time is re-imported.
 
     Args:
-        db: 异步数据库会话
-        funding_data: 资金费率数据字典
+        db: Async SQLAlchemy session.
+        funding_data: Funding payload dict compatible with `MarketFunding` columns.
 
     Returns:
-        MarketFunding 对象
+        The persisted `MarketFunding` ORM instance.
     """
-    funding = MarketFunding(
-        exchange=funding_data["exchange"],
-        symbol=funding_data["symbol"],
-        funding_rate=Decimal(str(funding_data["funding_rate"])),
-        funding_time=funding_data["funding_time"],
+    exchange = funding_data["exchange"]
+    symbol = funding_data["symbol"]
+    funding_time = funding_data["funding_time"]
+    funding_rate = Decimal(str(funding_data["funding_rate"]))
+
+    # NOTE:
+    # - funding_time 对应交易所结算时间，是天然的幂等 key
+    # - 资金费率偶尔会出现“同一个结算时间二次修正”的情况，所以冲突时选择更新 funding_rate
+    stmt = (
+        pg_insert(MarketFunding)
+        .values(
+            exchange=exchange,
+            symbol=symbol,
+            funding_rate=funding_rate,
+            funding_time=funding_time,
+        )
+        .on_conflict_do_update(
+            constraint="uq_funding_identity",
+            set_={"funding_rate": funding_rate},
+        )
+        .returning(MarketFunding.id)
     )
 
-    db.add(funding)
-    await db.flush()
+    result = await db.execute(stmt)
+    funding_pk = result.scalar_one()
+    funding_result = await db.execute(
+        select(MarketFunding).where(MarketFunding.id == funding_pk)
+    )
+    funding = funding_result.scalar_one()
 
     logger.debug(
-        f"资金费率已保存: {funding.symbol} rate={funding.funding_rate} "
+        f"资金费率已保存(幂等): {funding.symbol} rate={funding.funding_rate} "
         f"@ {funding.funding_time}"
     )
     return funding
@@ -477,28 +537,53 @@ async def save_open_interest(
     db: AsyncSession, oi_data: Dict[str, Any]
 ) -> MarketOpenInterest:
     """
-    保存持仓量数据到数据库。
+    Persist an open interest snapshot with idempotent semantics.
+
+    This uses PostgreSQL `INSERT ... ON CONFLICT DO UPDATE` on the unique identity
+    `(exchange, symbol, market_type, event_time)` to refresh `open_interest` if the
+    same event time is re-imported.
 
     Args:
-        db: 异步数据库会话
-        oi_data: 持仓量数据字典
+        db: Async SQLAlchemy session.
+        oi_data: Open interest payload dict compatible with `MarketOpenInterest` columns.
 
     Returns:
-        MarketOpenInterest 对象
+        The persisted `MarketOpenInterest` ORM instance.
     """
-    oi = MarketOpenInterest(
-        exchange=oi_data["exchange"],
-        symbol=oi_data["symbol"],
-        market_type=oi_data["market_type"],
-        open_interest=Decimal(str(oi_data["open_interest"])),
-        event_time=oi_data["event_time"],
+    exchange = oi_data["exchange"]
+    symbol = oi_data["symbol"]
+    market_type = oi_data["market_type"]
+    event_time = oi_data["event_time"]
+    open_interest = Decimal(str(oi_data["open_interest"]))
+
+    # NOTE:
+    # - event_time 是采集/事件时间，重复导入时应当幂等
+    # - 同一 event_time 的 OI 在某些来源可能会被修正，因此冲突时更新 open_interest
+    stmt = (
+        pg_insert(MarketOpenInterest)
+        .values(
+            exchange=exchange,
+            symbol=symbol,
+            market_type=market_type,
+            open_interest=open_interest,
+            event_time=event_time,
+        )
+        .on_conflict_do_update(
+            constraint="uq_open_interest_identity",
+            set_={"open_interest": open_interest},
+        )
+        .returning(MarketOpenInterest.id)
     )
 
-    db.add(oi)
-    await db.flush()
+    result = await db.execute(stmt)
+    oi_pk = result.scalar_one()
+    oi_result = await db.execute(
+        select(MarketOpenInterest).where(MarketOpenInterest.id == oi_pk)
+    )
+    oi = oi_result.scalar_one()
 
     logger.debug(
-        f"持仓量已保存: {oi.symbol} OI={oi.open_interest} @ {oi.event_time}"
+        f"持仓量已保存(幂等): {oi.symbol} OI={oi.open_interest} @ {oi.event_time}"
     )
     return oi
 

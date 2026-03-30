@@ -14,6 +14,10 @@
 - **行情导入 API 契约**：`MarketImportCreateRequest` 不再包含 `created_by` / `status`（由服务端从认证与默认值写入）；`MarketImportTaskResponse` 仍返回二者。
 - **Alembic**：`backend/migrations/env.py` 将 `target_metadata` 设为 `app.core.database.Base.metadata`，并 `import app.models` 以注册全部 ORM 表，使 `alembic revision --autogenerate` 能正确对比模型与数据库。`backend/alembic.ini` 注释改为纯 ASCII，避免在 Windows 下 `ConfigParser` 使用系统 locale 读取 UTF-8 字节时触发 `UnicodeDecodeError`。
 
+### 修复
+
+- **行情导入幂等写入**：为 `market_trades/market_fundings/market_open_interests` 增加唯一约束（交易/资金费率/OI 的 identity key），并在 `market_service` 保存逻辑中使用 PostgreSQL `ON CONFLICT` 实现重复导入不重复写入（funding/OI 冲突时按需要更新）。
+
 ### 新增
 
 - **行情导入任务（Market Import）**：新增 `MarketImportTask` ORM 模型与 Pydantic schemas（`backend/app/models/market_import_task.py`、`backend/app/schemas/market_import.py`），并添加 Alembic 迁移创建 `market_import_tasks` 表（`backend/migrations/versions/*_add_market_import_tasks.py`）。提供任务状态 `pending/running/completed/failed`、进度 `progress` 与 `result_json/last_error` 结果字段，便于后续导入服务与前端进度跟踪。

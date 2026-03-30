@@ -1,12 +1,13 @@
 """
-逐笔成交数据模型。
-记录交易所推送的实时逐笔成交信息。
+Market trade (tick-by-tick) ORM model.
+
+Stores executed trades streamed from exchanges for microstructure analysis.
 """
 
 from datetime import datetime
 from decimal import Decimal
 
-from sqlalchemy import BigInteger, String, DateTime, Numeric
+from sqlalchemy import BigInteger, String, DateTime, Numeric, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.sql import func
 
@@ -15,13 +16,23 @@ from app.core.database import Base
 
 class MarketTrade(Base):
     """
-    逐笔成交表模型。
+    Executed trades table.
 
-    存储交易所每一笔真实撮合成交的价格、数量和方向，
-    可用于微观结构分析或实时盘口监控。
+    Each row represents a single matched trade with price, quantity, and aggressor side.
     """
 
     __tablename__ = "market_trades"
+
+    # ---- 表级约束 ----
+    __table_args__ = (
+        UniqueConstraint(
+            "exchange",
+            "symbol",
+            "market_type",
+            "trade_id",
+            name="uq_trade_identity",
+        ),
+    )
 
     # ---- 主键 ----
     id: Mapped[int] = mapped_column(
