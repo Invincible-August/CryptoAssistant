@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+### 变更
+
+- **Alembic**：`backend/migrations/env.py` 将 `target_metadata` 设为 `app.core.database.Base.metadata`，并 `import app.models` 以注册全部 ORM 表，使 `alembic revision --autogenerate` 能正确对比模型与数据库。`backend/alembic.ini` 注释改为纯 ASCII，避免在 Windows 下 `ConfigParser` 使用系统 locale 读取 UTF-8 字节时触发 `UnicodeDecodeError`。
+
 ### 新增
 
 - **行情导入任务（Market Import）**：新增 `MarketImportTask` ORM 模型与 Pydantic schemas（`backend/app/models/market_import_task.py`、`backend/app/schemas/market_import.py`），并添加 Alembic 迁移创建 `market_import_tasks` 表（`backend/migrations/versions/*_add_market_import_tasks.py`）。提供任务状态 `pending/running/completed/failed`、进度 `progress` 与 `result_json/last_error` 结果字段，便于后续导入服务与前端进度跟踪。

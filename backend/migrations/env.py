@@ -34,16 +34,14 @@ if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
 # ===== 导入所有模型，确保 Alembic 能检测到 schema 变更 =====
-# 当新增模型文件时，需要在此处添加对应的 import
-# from app.models.user import User
-# from app.models.strategy import Strategy
+# SQLAlchemy 的 DeclarativeBase 只有在模型类被 import 时才会把表注册进 metadata。
+# 使用 `import app.models` 触发 `app/models/__init__.py` 中的全量导入，避免漏表导致
+# `alembic revision --autogenerate` 误报“删除未导入的表”。
+# noqa: F401 — 副作用 import，静态检查器可能报未使用，此处必须保留。
+from app.core.database import Base
+import app.models  # noqa: F401  # side-effect: registers all ORM tables on Base.metadata
 
-# 如果有统一的 Base，则在此引入作为 target_metadata
-# from app.models.base import Base
-# target_metadata = Base.metadata
-
-# 暂时设置为 None，待模型创建后替换
-target_metadata = None
+target_metadata = Base.metadata
 
 
 def run_migrations_offline() -> None:

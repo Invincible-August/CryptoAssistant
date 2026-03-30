@@ -13,6 +13,8 @@ from alembic import op
 
 # revision identifiers, used by Alembic.
 revision = "9f3c2a4b1d8e"
+# This repository had no prior Alembic revisions under `migrations/versions/`
+# (first migration in the chain). Keep down_revision=None until an older base revision exists.
 down_revision = None
 branch_labels = None
 depends_on = None
