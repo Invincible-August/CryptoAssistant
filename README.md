@@ -12,7 +12,7 @@
 - **AI分析模块** - OpenAI集成，市场分析和指标/因子建议（独立模块）
 - **TradingView集成** - Webhook信号接入（独立模块）
 - **执行辅助** - 模拟/真实下单，拆单/阶梯挂单（默认关闭）
-- **Web可视化** - React + Ant Design暗色主题，10个管理页面
+- **Web可视化** - React + Ant Design暗色主题，11个管理页面（含「导入行情」异步任务）
 - **权限管理** - JWT认证 + RBAC（管理员/普通用户）
 
 ## 技术栈
@@ -89,6 +89,7 @@ npm run dev
 ### 7. 访问系统
 
 - 前端界面: http://localhost:5173
+- 导入行情（导入历史数据）：前端菜单「导入行情」，创建导入任务后会自动轮询进度（支持 `kline` / `trades` / `funding_rate` / `open_interest`；`orderbook` 在 MVP 下会标记为不支持历史回放）
 - API文档: http://localhost:8000/docs
 - 默认账号: `admin` / `admin123456`
 
@@ -129,7 +130,7 @@ TradingAgent/
 │   └── requirements.txt
 ├── frontend/                   # 前端（React/TypeScript）
 │   ├── src/
-│   │   ├── pages/             # 10个页面
+│   │   ├── pages/             # 11个页面
 │   │   ├── layouts/           # 布局组件
 │   │   ├── services/          # API服务
 │   │   ├── store/             # 状态管理
