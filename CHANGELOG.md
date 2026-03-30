@@ -2,6 +2,12 @@
 
 本文件记录 TradingAgent 项目的所有重要变更。
 
+## [Unreleased]
+
+### 新增
+
+- **行情导入任务（Market Import）**：新增 `MarketImportTask` ORM 模型与 Pydantic schemas（`backend/app/models/market_import_task.py`、`backend/app/schemas/market_import.py`），并添加 Alembic 迁移创建 `market_import_tasks` 表（`backend/migrations/versions/*_add_market_import_tasks.py`）。提供任务状态 `pending/running/completed/failed`、进度 `progress` 与 `result_json/last_error` 结果字段，便于后续导入服务与前端进度跟踪。
+
 ## [0.3.1] - 2026-03-27
 
 ### 变更

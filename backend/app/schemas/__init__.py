@@ -91,6 +91,13 @@ from app.schemas.backtest import (
     BacktestTradeRecord,
 )
 
+# ── 行情导入（Market Import）────────────────────────────────
+from app.schemas.market_import import (
+    MarketImportCreateRequest,
+    MarketImportCreateResponse,
+    MarketImportTaskResponse,
+)
+
 # ── 订单执行 ──────────────────────────────────────────────
 from app.schemas.execution import (
     OrderFillResponse,
@@ -158,6 +165,10 @@ __all__ = [
     "BacktestTradeRecord",
     "BacktestResult",
     "BacktestResponse",
+    # 行情导入
+    "MarketImportCreateRequest",
+    "MarketImportCreateResponse",
+    "MarketImportTaskResponse",
     # 执行
     "OrderRequest",
     "OrderResponse",

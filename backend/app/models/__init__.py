@@ -21,6 +21,7 @@ from app.models.ai_analysis_record import AIAnalysisRecord
 from app.models.ai_generated_artifact import AIGeneratedArtifact
 from app.models.backtest_task import BacktestTask
 from app.models.backtest_trade import BacktestTrade
+from app.models.market_import_task import MarketImportTask
 from app.models.execution_order import ExecutionOrder
 from app.models.execution_fill import ExecutionFill
 from app.models.system_log import SystemLog
@@ -35,6 +36,7 @@ __all__ = [
     "AnalysisSnapshot", "SignalRecommendation",
     "AIAnalysisRecord", "AIGeneratedArtifact",
     "BacktestTask", "BacktestTrade",
+    "MarketImportTask",
     "ExecutionOrder", "ExecutionFill",
     "SystemLog", "ErrorLog",
 ]
