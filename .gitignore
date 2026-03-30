@@ -21,6 +21,9 @@ env/
 *.swp
 *.swo
 
+# Git worktrees (Cursor/Superpowers)
+.worktrees/
+
 # Logs
 logs/
 *.log
