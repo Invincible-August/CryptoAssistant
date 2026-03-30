@@ -177,6 +177,7 @@ class _FakeSession:
 
     def __init__(self, task: Any) -> None:
         self._task = task
+        self.flush = AsyncMock()
         self.commit = AsyncMock()
         self.rollback = AsyncMock()
 

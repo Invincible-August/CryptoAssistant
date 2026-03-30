@@ -55,6 +55,9 @@ async def create_market_import(
     )
     db.add(task)
     await db.flush()
+    # Ensure the background worker can read this task via a new DB session.
+    # `flush()` alone is not visible across sessions until `commit()`.
+    await db.commit()
     schedule_market_import(task.id)
     return ResponseBase(
         data=MarketImportCreateResponse(task_id=task.id).model_dump(),

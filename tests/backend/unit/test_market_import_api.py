@@ -39,6 +39,9 @@ async def test_create_market_import_persists_task_and_schedules_worker(
             if self.added:
                 setattr(self.added[0], "id", 42)
 
+        async def commit(self) -> None:
+            return None
+
     sess = _Sess()
     user = MagicMock()
     user.id = 7

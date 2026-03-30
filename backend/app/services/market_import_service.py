@@ -521,6 +521,10 @@ class MarketImportService:
         now = datetime.now(timezone.utc)
         task.status = "running"
         apply_progress_monotonic(task, 0.0)
+        session.add(task)
+        # Persist running/progress state so polling can observe it.
+        await session.flush()
+        await session.commit()
 
         type_results: Dict[str, Any] = {}
         errors: List[Dict[str, Any]] = []
@@ -738,6 +742,7 @@ class MarketImportService:
             last_open = int(raw[-1][0])
             cursor = last_open + 1
             bump()
+            await session.commit()
             if len(raw) < limit:
                 break
 
@@ -782,6 +787,7 @@ class MarketImportService:
                 await self.save_trade_fn(session, payload)
                 rows_saved += 1
             bump()
+            await session.commit()
 
         return rows_saved, {
             "status": "ok",
@@ -802,6 +808,7 @@ class MarketImportService:
             msg = "funding_rate import requires futures market_type"
             errors.append({"type": "funding_rate", "message": msg})
             bump()
+            await session.commit()
             return 0, {"status": "skipped", "reason": "spot_not_supported"}
 
         start_ms = int(task.start_date.timestamp() * 1000)
@@ -832,6 +839,7 @@ class MarketImportService:
             )
             cursor = last_ms + 1
             bump()
+            await session.commit()
             if len(rows) < _FUNDING_BATCH_LIMIT:
                 break
 
@@ -851,6 +859,7 @@ class MarketImportService:
             msg = "open_interest import requires futures market_type"
             errors.append({"type": "open_interest", "message": msg})
             bump()
+            await session.commit()
             return 0, {"status": "skipped", "reason": "spot_not_supported"}
 
         eff_start, eff_end, partial = crop_open_interest_range(
@@ -866,6 +875,7 @@ class MarketImportService:
                 }
             )
             bump()
+            await session.commit()
             return 0, {
                 "status": "empty",
                 "partial": True,
@@ -903,6 +913,7 @@ class MarketImportService:
             )
             cursor = last_ms + 1
             bump()
+            await session.commit()
             if len(rows) < _OI_BATCH_LIMIT:
                 break
 
