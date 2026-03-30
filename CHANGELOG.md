@@ -6,6 +6,8 @@
 
 ### 新增
 
+- **前端「导入行情」页**：`frontend/src/pages/MarketImport/index.tsx` 提供表单创建 `POST /api/v1/market/import` 任务（交易对、现货/合约、周期、UTC 日界时间范围、多选导入类型），创建后展示 `task_id` 并约每 2 秒轮询 `GET /api/v1/market/import/{task_id}`，显示进度条、状态标签与完成后的 `summary` / `type_results` / `errors`。API 封装见 `frontend/src/services/marketImport.ts`；侧栏菜单「导入行情」、路由 `/market-import`。需登录后访问。
+
 - **行情导入服务与 API**：`MarketImportService`（`backend/app/services/market_import_service.py`）从 `market_import_tasks` 读取任务配置，将状态置为 `running`，按 `import_types` 拉取历史数据并写入 `market_service.save_*`（K 线重复行通过嵌套事务跳过唯一约束冲突）。MVP 支持 `kline` / `trades` / `funding_rate` / `open_interest`；`orderbook` 标记为 `unsupported_historical` 不做历史回补。聚合成交按 ≤1 小时窗口分片；持仓量历史裁剪至最近 30 天并在 `type_results` 中标记 `partial`；`result_json` 含 `summary` + `type_results` + `errors`。新增 `POST /api/v1/market/import`（创建任务并 `asyncio.create_task` 后台执行）、`GET /api/v1/market/import/{task_id}`（查询状态与结果）。单元测试见 `tests/backend/unit/test_market_import_service.py`、`tests/backend/unit/test_market_import_api.py`（无网络、无真实 DB）。
 
 - **Binance 行情导入 REST 历史接口**：`BinanceRestClient` 增加现货/合约聚合成交历史（`/api/v3/aggTrades`、`/fapi/v1/aggTrades`）、资金费率历史（`/fapi/v1/fundingRate`）、持仓量历史（`/futures/data/openInterestHist`）；`_request` 支持 `use_proxy=True` 时按优先级解析代理；`settings.BINANCE_PROXY_ENABLED` 为 True 且 `settings.BINANCE_PROXY_URL` 非空时优先使用该 URL，否则回退到 `HTTPS_PROXY`/`HTTP_PROXY`（`BINANCE_PROXY_ENABLED` 为 False 时忽略应用内 URL）。`BinanceAdapter` 提供对应高层方法与解析（`parser.py` 中聚合成交与资金/OI 历史行规范化）。单元测试见 `tests/backend/unit/test_binance_rest_market_import.py`（monkeypatch `_request` / AsyncMock httpx，无网络）。

@@ -11,6 +11,7 @@ import Backtest from '../pages/Backtest'
 import AIAnalysis from '../pages/AIAnalysis'
 import Settings from '../pages/Settings'
 import Logs from '../pages/Logs'
+import MarketImport from '../pages/MarketImport'
 import { useAuthStore } from '../store/auth'
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
@@ -41,6 +42,7 @@ export default function AppRouter() {
         <Route index element={<Dashboard />} />
         <Route path="monitor" element={<Monitor />} />
         <Route path="chart" element={<ChartAnalysis />} />
+        <Route path="market-import" element={<MarketImport />} />
         <Route path="indicators" element={<Indicators />} />
         <Route path="factors" element={<Factors />} />
         <Route path="backtest" element={<Backtest />} />
