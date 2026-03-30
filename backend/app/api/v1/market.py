@@ -2,19 +2,85 @@
 行情数据API路由。
 提供K线、成交、深度、资金费率、持仓量等数据查询接口。
 """
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, desc
 from app.api.deps import get_db, get_current_user
 from app.models.user import User
+from app.models.market_import_task import MarketImportTask
 from app.models.market_kline import MarketKline
 from app.models.market_trade import MarketTrade
 from app.models.market_orderbook_snapshot import MarketOrderbookSnapshot
 from app.models.market_funding import MarketFunding
 from app.models.market_open_interest import MarketOpenInterest
 from app.schemas.common import ResponseBase
+from app.schemas.market_import import (
+    MarketImportCreateRequest,
+    MarketImportCreateResponse,
+    MarketImportTaskResponse,
+)
+from app.services.market_import_service import schedule_market_import
 
 router = APIRouter()
+
+
+@router.post("/import", response_model=ResponseBase, summary="创建行情导入任务")
+async def create_market_import(
+    payload: MarketImportCreateRequest,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """
+    Persist a ``MarketImportTask`` and schedule a background import job.
+
+    The worker reads task configuration from the database, marks status
+    ``running``, pulls historical data per ``import_types``, and writes via
+    ``market_service`` upsert helpers.
+    """
+    if payload.start_date > payload.end_date:
+        raise HTTPException(status_code=400, detail="start_date must be <= end_date")
+
+    task = MarketImportTask(
+        name=payload.name,
+        created_by=user.id,
+        exchange=payload.exchange,
+        market_type=payload.market_type,
+        symbol=payload.symbol,
+        timeframe=payload.timeframe,
+        start_date=payload.start_date,
+        end_date=payload.end_date,
+        import_types=list(payload.import_types or []),
+        status="pending",
+        progress=0.0,
+    )
+    db.add(task)
+    await db.flush()
+    schedule_market_import(task.id)
+    return ResponseBase(
+        data=MarketImportCreateResponse(task_id=task.id).model_dump(),
+    )
+
+
+@router.get(
+    "/import/{task_id}",
+    response_model=ResponseBase,
+    summary="查询行情导入任务",
+)
+async def get_market_import(
+    task_id: int,
+    db: AsyncSession = Depends(get_db),
+    _user: User = Depends(get_current_user),
+):
+    """Return a single market import task including status and ``result_json``."""
+    result = await db.execute(
+        select(MarketImportTask).where(MarketImportTask.id == task_id)
+    )
+    task = result.scalar_one_or_none()
+    if task is None:
+        raise HTTPException(status_code=404, detail="任务不存在")
+    return ResponseBase(
+        data=MarketImportTaskResponse.model_validate(task).model_dump(),
+    )
 
 
 @router.get("/klines", response_model=ResponseBase, summary="获取K线数据")
