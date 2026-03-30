@@ -76,12 +76,12 @@ class MarketImportTask(Base):
         comment="Timeframe for kline import, e.g. 1m / 1h",
     )
     start_date: Mapped[datetime] = mapped_column(
-        DateTime,
+        DateTime(timezone=True),
         nullable=False,
         comment="Import start timestamp (inclusive)",
     )
     end_date: Mapped[datetime] = mapped_column(
-        DateTime,
+        DateTime(timezone=True),
         nullable=False,
         comment="Import end timestamp (inclusive)",
     )
@@ -91,6 +91,7 @@ class MarketImportTask(Base):
     import_types: Mapped[Any] = mapped_column(
         JSON,
         nullable=False,
+        default=lambda: [],
         comment="Import types list (JSON)",
     )
 
@@ -98,11 +99,13 @@ class MarketImportTask(Base):
     status: Mapped[str] = mapped_column(
         String(32),
         nullable=False,
+        default="pending",
         comment="Task status (pending / running / completed / failed)",
     )
     progress: Mapped[float] = mapped_column(
         Float,
         nullable=False,
+        default=0.0,
         comment="Progress in [0,1]",
     )
 
@@ -120,18 +123,18 @@ class MarketImportTask(Base):
 
     # ---- Timestamps ----
     created_at: Mapped[datetime] = mapped_column(
-        DateTime,
+        DateTime(timezone=True),
         server_default=func.now(),
         comment="Created at",
     )
     updated_at: Mapped[Optional[datetime]] = mapped_column(
-        DateTime,
+        DateTime(timezone=True),
         onupdate=func.now(),
         nullable=True,
         comment="Updated at",
     )
     finished_at: Mapped[Optional[datetime]] = mapped_column(
-        DateTime,
+        DateTime(timezone=True),
         nullable=True,
         comment="Finished at (completed/failed)",
     )

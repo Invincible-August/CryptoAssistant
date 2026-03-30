@@ -52,6 +52,24 @@ class TestMarketImportSchemas:
         with pytest.raises(ValidationError):
             MarketImportCreateRequest.model_validate(payload)
 
+    def test_create_request_rejects_naive_datetimes(self) -> None:
+        """Naive datetimes must be rejected to avoid timezone ambiguity."""
+        payload = {
+            "exchange": "binance",
+            "market_type": "spot",
+            "symbol": "BTCUSDT",
+            "timeframe": "1h",
+            "start_date": datetime(2024, 1, 1),  # naive
+            "end_date": datetime(2024, 1, 2),  # naive
+            "import_types": ["kline"],
+        }
+
+        with pytest.raises(ValidationError) as exc_info:
+            MarketImportCreateRequest.model_validate(payload)
+
+        # Explicit error message makes API misuse easier to debug.
+        assert "timezone-aware" in str(exc_info.value)
+
     def test_task_response_accepts_arbitrary_result_json_shape(self) -> None:
         """result_json should accept nested JSON-like objects without strict schema."""
         payload = {

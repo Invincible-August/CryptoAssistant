@@ -10,13 +10,25 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Dict, List, Literal, Optional
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 # NOTE:
 # - We keep status values aligned with the ORM model and API expectations.
 # - Using Literal makes client-side validation and OpenAPI docs clearer.
 MarketImportStatus = Literal["pending", "running", "completed", "failed"]
+
+def _require_tz_aware(value: datetime, *, field_name: str) -> datetime:
+    """
+    Require timezone-aware datetimes.
+
+    We intentionally reject naive datetimes to avoid ambiguous interpretations
+    (local time vs UTC). API clients should always send ISO8601 with offset,
+    e.g. `2024-01-01T00:00:00Z` or `2024-01-01T08:00:00+08:00`.
+    """
+    if value.tzinfo is None or value.tzinfo.utcoffset(value) is None:
+        raise ValueError(f"{field_name} must be timezone-aware (include offset or Z)")
+    return value
 
 
 class MarketImportCreateRequest(BaseModel):
@@ -56,6 +68,12 @@ class MarketImportCreateRequest(BaseModel):
         default="pending",
         description="任务状态：pending / running / completed / failed",
     )
+
+    @field_validator("start_date", "end_date")
+    @classmethod
+    def validate_datetime_tz_aware(cls, value: datetime, info):  # type: ignore[override]
+        """Reject naive datetimes explicitly to preserve correct timezone semantics."""
+        return _require_tz_aware(value, field_name=info.field_name)
 
 
 class MarketImportCreateResponse(BaseModel):
@@ -117,3 +135,17 @@ class MarketImportTaskResponse(BaseModel):
     created_at: datetime = Field(..., description="创建时间")
     updated_at: Optional[datetime] = Field(default=None, description="更新时间")
     finished_at: Optional[datetime] = Field(default=None, description="完成时间（成功/失败时）")
+
+    @field_validator("start_date", "end_date", "created_at", "updated_at", "finished_at")
+    @classmethod
+    def validate_response_datetimes_tz_aware(cls, value: Optional[datetime], info):  # type: ignore[override]
+        """
+        Ensure all datetime fields are timezone-aware.
+
+        Even though DB columns are timezone-aware, this extra check prevents
+        accidentally serializing naive timestamps if upstream code constructs
+        response payloads manually.
+        """
+        if value is None:
+            return value
+        return _require_tz_aware(value, field_name=info.field_name)
