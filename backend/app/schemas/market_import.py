@@ -35,9 +35,12 @@ class MarketImportCreateRequest(BaseModel):
     """
     Market import task creation request.
 
+    Server-controlled fields (e.g. ``created_by`` from auth, initial ``status``
+    defaulting to ``pending``) are not part of this schema; the API layer sets
+    them when persisting the task.
+
     Attributes:
         name: Optional human-friendly task name for display/search.
-        created_by: Optional user id who initiated the import (RBAC context).
         exchange: Exchange identifier, e.g. "binance".
         market_type: Market type, e.g. "spot" or "futures".
         symbol: Trading symbol, e.g. "BTCUSDT".
@@ -45,11 +48,9 @@ class MarketImportCreateRequest(BaseModel):
         start_date: Import start timestamp (inclusive).
         end_date: Import end timestamp (inclusive).
         import_types: Which datasets to import (stored as JSON in DB).
-        status: Optional initial status (defaults to "pending").
     """
 
     name: Optional[str] = Field(default=None, max_length=128, description="任务名称（可选）")
-    created_by: Optional[int] = Field(default=None, ge=1, description="创建者用户ID（可选）")
 
     exchange: str = Field(..., max_length=32, description="交易所标识，例如 binance")
     market_type: str = Field(..., max_length=32, description="市场类型，例如 spot / futures")
@@ -62,11 +63,6 @@ class MarketImportCreateRequest(BaseModel):
     import_types: List[str] = Field(
         default_factory=list,
         description="导入类型列表，例如 ['kline','trade']（JSON存储）",
-    )
-
-    status: MarketImportStatus = Field(
-        default="pending",
-        description="任务状态：pending / running / completed / failed",
     )
 
     @field_validator("start_date", "end_date")

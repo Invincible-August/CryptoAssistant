@@ -36,21 +36,11 @@ class TestMarketImportSchemas:
         assert req.exchange == "binance"
         assert req.import_types == ["kline", "trade"]
 
-    def test_create_request_rejects_invalid_status_value(self) -> None:
-        """Status should be constrained to pending/running/completed/failed."""
-        payload = {
-            "exchange": "binance",
-            "market_type": "spot",
-            "symbol": "BTCUSDT",
-            "timeframe": "1h",
-            "start_date": datetime(2024, 1, 1, tzinfo=timezone.utc),
-            "end_date": datetime(2024, 1, 2, tzinfo=timezone.utc),
-            "import_types": ["kline"],
-            "status": "unknown_status",
-        }
-
-        with pytest.raises(ValidationError):
-            MarketImportCreateRequest.model_validate(payload)
+    def test_create_request_excludes_server_controlled_fields(self) -> None:
+        """created_by and status are server-controlled; create schema must not expose them."""
+        field_names = set(MarketImportCreateRequest.model_fields.keys())
+        assert "created_by" not in field_names
+        assert "status" not in field_names
 
     def test_create_request_rejects_naive_datetimes(self) -> None:
         """Naive datetimes must be rejected to avoid timezone ambiguity."""

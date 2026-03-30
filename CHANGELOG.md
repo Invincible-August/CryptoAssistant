@@ -6,6 +6,7 @@
 
 ### 变更
 
+- **行情导入 API 契约**：`MarketImportCreateRequest` 不再包含 `created_by` / `status`（由服务端从认证与默认值写入）；`MarketImportTaskResponse` 仍返回二者。
 - **Alembic**：`backend/migrations/env.py` 将 `target_metadata` 设为 `app.core.database.Base.metadata`，并 `import app.models` 以注册全部 ORM 表，使 `alembic revision --autogenerate` 能正确对比模型与数据库。`backend/alembic.ini` 注释改为纯 ASCII，避免在 Windows 下 `ConfigParser` 使用系统 locale 读取 UTF-8 字节时触发 `UnicodeDecodeError`。
 
 ### 新增
