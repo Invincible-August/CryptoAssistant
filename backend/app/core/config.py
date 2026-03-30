@@ -32,9 +32,9 @@ class Settings(BaseSettings):
     BINANCE_API_KEY: str = ""
     BINANCE_API_SECRET: str = ""
     BINANCE_TESTNET: bool = True  # 默认使用测试网，生产环境需关闭
-    # 可选：REST 层 use_proxy=True 时，优先使用此处（需 BINANCE_PROXY_ENABLED=true）
+    # 可选：REST 层 use_proxy=True 时，在 BINANCE_PROXY_ENABLED=true 且 URL 非空时优先使用（默认与本项目常见本地代理端口一致）
     BINANCE_PROXY_ENABLED: bool = False
-    BINANCE_PROXY_URL: str = ""
+    BINANCE_PROXY_URL: str = "http://127.0.0.1:7890"
 
     # ==================== OpenAI配置 ====================
     OPENAI_API_KEY: str = ""

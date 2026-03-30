@@ -43,7 +43,7 @@ copy .env.example .env
 # 编辑 .env 文件，确保数据库连接信息正确
 ```
 
-可选：若需在受限网络下通过代理拉取 Binance 历史行情（REST 层 `use_proxy=True`），可在 `.env` 中设置 `BINANCE_PROXY_ENABLED=true` 与 `BINANCE_PROXY_URL`（应用内代理优先），或设置系统环境变量 `HTTPS_PROXY` / `HTTP_PROXY`（`BINANCE_PROXY_ENABLED` 为 false 时仅使用环境变量）。
+可选：若需在受限网络下通过代理拉取 Binance 历史行情（REST 层 `use_proxy=True`），在 `use_proxy=True` 时解析顺序为：`BINANCE_PROXY_ENABLED=true` 且 `BINANCE_PROXY_URL` 非空则优先使用该 URL（代码默认 `http://127.0.0.1:7890`，可在 `.env` 覆盖），否则使用环境变量 `HTTPS_PROXY` / `HTTP_PROXY`；`BINANCE_PROXY_ENABLED=false` 时忽略应用内 URL，仅使用环境变量。
 
 ### 3. 初始化数据库
 

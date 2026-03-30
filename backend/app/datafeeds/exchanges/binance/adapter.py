@@ -337,7 +337,9 @@ class BinanceAdapter(BaseExchangeAdapter):
             start_time: Window start (ms).
             end_time: Window end (ms).
             limit: Max trades per request (capped by Binance).
-            use_proxy: Forwarded to REST client when proxy env vars are set.
+            use_proxy: Passed to REST ``get_spot_agg_trades``; when True, proxy
+                resolution matches ``BinanceRestClient._request`` (app URL if
+                enabled and non-empty, else ``HTTPS_PROXY``/``HTTP_PROXY``).
 
         Returns:
             List of serializable trade dictionaries.
@@ -380,7 +382,8 @@ class BinanceAdapter(BaseExchangeAdapter):
             start_time: Window start (ms).
             end_time: Window end (ms).
             limit: Max trades per request.
-            use_proxy: Forwarded to REST client when proxy env vars are set.
+            use_proxy: Passed to REST ``get_futures_agg_trades``; when True,
+                proxy resolution matches ``BinanceRestClient._request``.
 
         Returns:
             List of serializable trade dictionaries.
@@ -423,7 +426,8 @@ class BinanceAdapter(BaseExchangeAdapter):
             start_time: Window start (ms).
             end_time: Window end (ms).
             limit: Max rows per request.
-            use_proxy: Forwarded to REST client when proxy env vars are set.
+            use_proxy: Passed to REST ``get_funding_rate_history``; when True,
+                proxy resolution matches ``BinanceRestClient._request``.
 
         Returns:
             List of normalized funding rate dicts.
@@ -455,7 +459,8 @@ class BinanceAdapter(BaseExchangeAdapter):
             start_time: Window start (ms), optional.
             end_time: Window end (ms), optional.
             limit: Max rows per request.
-            use_proxy: Forwarded to REST client when proxy env vars are set.
+            use_proxy: Passed to REST ``get_open_interest_history``; when True,
+                proxy resolution matches ``BinanceRestClient._request``.
 
         Returns:
             List of normalized open interest history dicts.

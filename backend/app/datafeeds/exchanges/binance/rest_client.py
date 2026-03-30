@@ -126,12 +126,12 @@ class BinanceRestClient:
             base_url: API 基础地址
             path: 接口路径（如 "/api/v3/klines"）
             params: 查询参数字典
-            use_proxy: 为 True 时，为该请求解析代理 URL（便于在受限网络下抓取历史数据）。
-                解析优先级（仅当 ``use_proxy=True`` 时生效）：
+            use_proxy: 为 True 时为该请求显式解析代理（与 httpx 默认 ``trust_env`` 解耦，避免隐式走系统代理）。
+                仅当 ``use_proxy=True`` 时生效，优先级为：
                 1. 若 ``settings.BINANCE_PROXY_ENABLED`` 为 True 且
-                   ``settings.BINANCE_PROXY_URL`` 非空，则使用该字符串；
-                2. 否则使用环境变量 ``HTTPS_PROXY``，再否则 ``HTTP_PROXY``。
-                当 ``BINANCE_PROXY_ENABLED`` 为 False 时，忽略应用内 URL，仅走环境变量。
+                   ``settings.BINANCE_PROXY_URL``（去空白后）非空，则使用该 URL；
+                2. 否则依次使用环境变量 ``HTTPS_PROXY``、``HTTP_PROXY``。
+                当 ``BINANCE_PROXY_ENABLED`` 为 False 时，忽略应用内 URL，仅使用第 2 步。
 
         Returns:
             接口返回的 JSON 数据
@@ -332,8 +332,9 @@ class BinanceRestClient:
             start_time: Inclusive start time in milliseconds (optional).
             end_time: Exclusive end time in milliseconds (optional).
             limit: Max rows per request (capped at 1000 per Binance).
-            use_proxy: When True and ``HTTPS_PROXY``/``HTTP_PROXY`` is set, use
-                that proxy for this request.
+            use_proxy: When True, resolve proxy like ``_request``:
+                if ``BINANCE_PROXY_ENABLED`` and non-empty ``BINANCE_PROXY_URL``,
+                use that URL; else ``HTTPS_PROXY`` / ``HTTP_PROXY``.
 
         Returns:
             Raw JSON list of aggregate trade objects.
@@ -452,7 +453,9 @@ class BinanceRestClient:
             start_time: Inclusive start time in milliseconds (optional).
             end_time: Exclusive end time in milliseconds (optional).
             limit: Max rows per request (capped at 1000 per Binance).
-            use_proxy: When True and proxy env vars are set, use proxy for this request.
+            use_proxy: When True, resolve proxy like ``_request``:
+                if ``BINANCE_PROXY_ENABLED`` and non-empty ``BINANCE_PROXY_URL``,
+                use that URL; else ``HTTPS_PROXY`` / ``HTTP_PROXY``.
 
         Returns:
             Raw JSON list of aggregate trade objects.
@@ -530,7 +533,9 @@ class BinanceRestClient:
             start_time: Start time in milliseconds (optional).
             end_time: End time in milliseconds (optional).
             limit: Max rows (capped at 1000 per Binance).
-            use_proxy: When True and proxy env vars are set, use proxy for this request.
+            use_proxy: When True, resolve proxy like ``_request``:
+                if ``BINANCE_PROXY_ENABLED`` and non-empty ``BINANCE_PROXY_URL``,
+                use that URL; else ``HTTPS_PROXY`` / ``HTTP_PROXY``.
 
         Returns:
             Raw JSON list of funding rate objects.
@@ -578,7 +583,9 @@ class BinanceRestClient:
             start_time: Start time in milliseconds (optional).
             end_time: End time in milliseconds (optional).
             limit: Max rows (default 500; cap per Binance docs).
-            use_proxy: When True and proxy env vars are set, use proxy for this request.
+            use_proxy: When True, resolve proxy like ``_request``:
+                if ``BINANCE_PROXY_ENABLED`` and non-empty ``BINANCE_PROXY_URL``,
+                use that URL; else ``HTTPS_PROXY`` / ``HTTP_PROXY``.
 
         Returns:
             Raw JSON list of open interest history objects.
