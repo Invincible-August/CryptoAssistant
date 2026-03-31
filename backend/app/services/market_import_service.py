@@ -73,6 +73,97 @@ _PROCESS_ORDER: Tuple[str, ...] = (
 
 _SUPPORTED_IMPORT_TYPES: frozenset[str] = frozenset(_PROCESS_ORDER)
 
+# -----------------------------------------------------------------------------
+# Import type capability table (min granularity & progress estimation)
+# -----------------------------------------------------------------------------
+#
+# 说明（中文）：
+# - 前端/任务表里的 `task.timeframe` 是“请求意图”，但并不等于交易所接口真实可用粒度。
+# - 为保证导入执行器行为稳定可预期，这里定义每个 import type 的“能力表/最小可用粒度”。
+# - Task3 规则：
+#   - kline: 永远用 1m 拉取（即使 task.timeframe 不是 1m，也不能向上采样/插值）
+#   - open_interest: 用 Binance 可用的最小 period（当前为 5m），不做 1m 插值/对齐
+#   - funding_rate: 按事件粒度拉取（通常 8h/次），不插值
+#
+# 设计要点：
+# - 把“有效粒度”写入 result_json，便于 UI/排障/回放任务。
+# - 进度估算也基于“有效粒度”，避免 timeframe 被上层强制/误传导致进度跳变。
+_IMPORT_TYPE_CAPABILITIES: Dict[str, Dict[str, Any]] = {
+    "kline": {
+        "mode": "fixed_interval",
+        "effective_interval": "1m",
+        # kline 进度估算用 1m 间隔
+        "progress_interval_ms": 60_000,
+    },
+    "open_interest": {
+        "mode": "min_period",
+        # Binance openInterestHist 最小 period；与 task.timeframe 无关
+        "effective_period": "5m",
+        "progress_interval_ms": 5 * 60_000,
+    },
+    "funding_rate": {
+        "mode": "event_based",
+        # Binance fundingRate 通常每 8 小时一条（不保证严格固定，但用于估算/说明足够）
+        "effective_period": "8h",
+        "progress_interval_ms": 8 * 3_600_000,
+    },
+    # 其他类型先留空白能力（便于未来扩展）
+    "trades": {"mode": "chunked"},
+    "orderbook": {"mode": "unsupported_historical"},
+}
+
+
+def _cap(kind: str) -> Dict[str, Any]:
+    """
+    Return capability info for an import kind.
+
+    Args:
+        kind: Canonical import type key.
+
+    Returns:
+        Capability dict (empty when unknown).
+    """
+    return dict(_IMPORT_TYPE_CAPABILITIES.get(kind, {}))
+
+
+def _effective_granularity_for_task(task: MarketImportTask, kind: str) -> Dict[str, Any]:
+    """
+    Compute the effective data granularity for an import type.
+
+    说明（中文）：
+    - 这里是“真正向交易所请求数据时使用的粒度”，用于强制最小粒度降级，
+      以及写入 result_json 供前端展示。
+    - 该函数不做插值/重采样；只返回“实际请求参数”。
+
+    Args:
+        task: Import task row.
+        kind: Import type key.
+
+    Returns:
+        Dict including effective_interval/effective_period and a short explanation.
+    """
+    c = _cap(kind)
+    mode = c.get("mode")
+    if kind == "kline":
+        return {
+            "mode": mode,
+            "effective_interval": c.get("effective_interval", "1m"),
+            "explain": "kline 永远按 1m 拉取；不随 task.timeframe 改变",
+        }
+    if kind == "open_interest":
+        return {
+            "mode": mode,
+            "effective_period": c.get("effective_period", "5m"),
+            "explain": "open_interest 使用交易所最小 period；不做 1m 插值/对齐",
+        }
+    if kind == "funding_rate":
+        return {
+            "mode": mode,
+            "effective_period": c.get("effective_period", "8h"),
+            "explain": "funding_rate 按事件粒度拉取（通常 8h）；不插值",
+        }
+    return {"mode": mode or "unknown", "explain": "no capability rule defined"}
+
 
 def normalize_import_types(raw: List[str]) -> List[str]:
     """
@@ -160,6 +251,120 @@ def apply_progress_monotonic(task: MarketImportTask, value: float) -> None:
     """
     clamped = max(0.0, min(1.0, float(value)))
     task.progress = max(float(task.progress or 0.0), clamped)
+
+
+class TaskProgressLogger:
+    """
+    Throttled progress logger for market import tasks.
+
+    This helper logs progress updates at most once per 5 seconds per task_id and
+    enforces monotonic (non-decreasing) progress.
+    """
+
+    def __init__(
+        self,
+        *,
+        logger: Any = logger,
+        now_fn: Optional[Callable[[], datetime]] = None,
+        throttle_seconds: float = 5.0,
+    ) -> None:
+        """
+        Create a new progress logger.
+
+        Args:
+            logger: Logger-like object exposing ``info(message, *args)``.
+            now_fn: Injectable time source for production callers (optional).
+            throttle_seconds: Minimum seconds between logs per task_id.
+        """
+
+        # 说明（中文）：
+        # - 为了让单测不依赖真实时间，这里把时间源抽象为可注入 now_fn。
+        # - 在 maybe_log/flush 中也支持显式传入 now，测试可直接传固定时间点。
+        self._logger = logger
+        self._now_fn = now_fn or (lambda: datetime.now(timezone.utc))
+        self._throttle_seconds = float(throttle_seconds)
+
+        # 说明（中文）：
+        # - 按 task_id 维度节流：同一 task 5 秒内最多输出 1 条。
+        # - progress 必须单调不下降：回退的 progress 不输出且不覆盖 last_progress。
+        self._last_log_at_by_task_id: Dict[int, datetime] = {}
+        self._last_progress_by_task_id: Dict[int, float] = {}
+
+    def maybe_log(
+        self,
+        *,
+        task: Any,
+        import_type: str,
+        progress_0_1: float,
+        now: Optional[datetime] = None,
+        force: bool = False,
+    ) -> bool:
+        """
+        Log a progress line when allowed by throttle and monotonic rules.
+
+        Args:
+            task: Object with ``id``, ``name`` (optional), and ``symbol``.
+            import_type: Import type key (e.g. kline/trades/open_interest).
+            progress_0_1: Progress fraction in [0,1].
+            now: Current time instant (timezone-aware). If omitted, uses ``now_fn``.
+            force: When True, bypass throttle and always log (still clamps progress).
+
+        Returns:
+            True if a log line was emitted, else False.
+        """
+        task_id = int(getattr(task, "id"))
+        task_name = getattr(task, "name", None) or f"market_import_{task_id}"
+        symbol = getattr(task, "symbol", "")
+
+        ts = now or self._now_fn()
+        clamped = max(0.0, min(1.0, float(progress_0_1)))
+
+        last_progress = float(self._last_progress_by_task_id.get(task_id, 0.0))
+        if clamped < last_progress and not force:
+            return False
+
+        # 说明（中文）：即使节流导致本次不输出，也要记住“最新的最高进度”，避免下一次输出落后。
+        if clamped >= last_progress:
+            self._last_progress_by_task_id[task_id] = clamped
+
+        if not force:
+            last_log_at = self._last_log_at_by_task_id.get(task_id)
+            if last_log_at is not None:
+                delta_s = (ts - last_log_at).total_seconds()
+                if delta_s < self._throttle_seconds:
+                    return False
+
+        self._last_log_at_by_task_id[task_id] = ts
+        percent = int(clamped * 100)
+        self._logger.info(
+            "Market import progress task={} symbol={} import_type={} progress={}%",
+            task_name,
+            symbol,
+            import_type,
+            percent,
+        )
+        return True
+
+    def flush(
+        self,
+        *,
+        task: Any,
+        import_type: str,
+        now: Optional[datetime] = None,
+    ) -> bool:
+        """
+        Force emit a 100% progress log for a task.
+
+        说明（中文）：用于任务结束时强制输出一条 100%，避免最后一次日志被节流吞掉。
+        """
+        ts = now or self._now_fn()
+        return self.maybe_log(
+            task=task,
+            import_type=import_type,
+            progress_0_1=1.0,
+            now=ts,
+            force=True,
+        )
 
 
 def build_result_json(
@@ -521,6 +726,7 @@ class MarketImportService:
         now = datetime.now(timezone.utc)
         task.status = "running"
         apply_progress_monotonic(task, 0.0)
+        progress_logger = TaskProgressLogger()
         session.add(task)
         # Persist running/progress state so polling can observe it.
         await session.flush()
@@ -537,28 +743,40 @@ class MarketImportService:
         total_units = self._estimate_total_units(task, requested, now)
         total_units = max(1, total_units)
 
-        def bump() -> None:
+        def bump(kind: str) -> None:
             nonlocal completed_units
             completed_units += 1
             denom = max(total_units, completed_units)
             apply_progress_monotonic(task, 0.05 + 0.9 * (completed_units / denom))
+            progress_logger.maybe_log(
+                task=task,
+                import_type=kind,
+                progress_0_1=float(task.progress or 0.0),
+                now=datetime.now(timezone.utc),
+            )
 
         for kind in requested:
             if kind == "kline":
-                n, tr = await self._import_klines(session, task, bump=bump)
+                n, tr = await self._import_klines(
+                    session, task, bump=lambda: bump("kline")
+                )
                 rows_total += n
                 type_results["kline"] = tr
             elif kind == "trades":
-                n, tr = await self._import_trades(session, task, bump=bump)
+                n, tr = await self._import_trades(
+                    session, task, bump=lambda: bump("trades")
+                )
                 rows_total += n
                 type_results["trades"] = tr
             elif kind == "funding_rate":
-                n, tr = await self._import_funding(session, task, errors, bump=bump)
+                n, tr = await self._import_funding(
+                    session, task, errors, bump=lambda: bump("funding_rate")
+                )
                 rows_total += n
                 type_results["funding_rate"] = tr
             elif kind == "open_interest":
                 n, tr = await self._import_open_interest(
-                    session, task, now, errors, bump=bump
+                    session, task, now, errors, bump=lambda: bump("open_interest")
                 )
                 rows_total += n
                 type_results["open_interest"] = tr
@@ -570,17 +788,34 @@ class MarketImportService:
                         "use live depth streams instead."
                     ),
                 }
-                bump()
+                bump("orderbook")
 
         finished_at = datetime.now(timezone.utc)
         apply_progress_monotonic(task, 1.0)
         task.status = "completed"
         task.finished_at = finished_at
+        progress_logger.flush(task=task, import_type="final", now=finished_at)
+
+        # 说明（中文）：把每个 import type 的“实际取数粒度”汇总进 summary，便于 UI 展示与排障。
+        effective_granularity: Dict[str, Any] = {}
+        for k in list(type_results.keys()):
+            if k not in _SUPPORTED_IMPORT_TYPES:
+                continue
+            eg = _effective_granularity_for_task(task, k)
+            # 只保留稳定字段，避免把 explain 过长内容塞到 summary
+            item: Dict[str, Any] = {"mode": eg.get("mode")}
+            if "effective_interval" in eg:
+                item["effective_interval"] = eg.get("effective_interval")
+            if "effective_period" in eg:
+                item["effective_period"] = eg.get("effective_period")
+            effective_granularity[k] = item
+
         task.result_json = build_result_json(
             summary={
                 "import_types_requested": summary_requested,
                 "import_types_completed": list(type_results.keys()),
                 "rows_total": rows_total,
+                "effective_granularity": effective_granularity,
             },
             type_results=type_results,
             errors=errors,
@@ -627,6 +862,8 @@ class MarketImportService:
         end_ex = _inclusive_end_to_exclusive_ms(task.end_date)
         span = max(0, end_ex - start_ms)
         units = 0
+        # 说明（中文）：进度估算必须基于“实际取数粒度”，不能直接依赖 task.timeframe。
+        # 例如：kline 永远按 1m 拉取；OI 永远按 5m（最小 period）拉取。
         interval_ms = _interval_to_milliseconds(task.timeframe)
         kline_limit = (
             _KLINE_LIMIT_SPOT if task.market_type == "spot" else _KLINE_LIMIT_FUTURES
@@ -636,7 +873,8 @@ class MarketImportService:
             if kind == "orderbook":
                 units += 1
             elif kind == "kline":
-                est_klines = max(1, span // max(1, interval_ms))
+                kline_interval = _cap("kline").get("progress_interval_ms", 60_000)
+                est_klines = max(1, span // max(1, int(kline_interval)))
                 units += max(1, (est_klines + kline_limit - 1) // kline_limit)
             elif kind == "trades":
                 units += max(
@@ -653,8 +891,12 @@ class MarketImportService:
                 if task.market_type != "futures":
                     units += 1
                 else:
-                    est_rows = max(1, span // (8 * 3_600_000) + 1)
-                    units += max(1, (est_rows + _FUNDING_BATCH_LIMIT - 1) // _FUNDING_BATCH_LIMIT)
+                    fr_ms = int(_cap("funding_rate").get("progress_interval_ms", 8 * 3_600_000))
+                    est_rows = max(1, span // max(1, fr_ms) + 1)
+                    units += max(
+                        1,
+                        (est_rows + _FUNDING_BATCH_LIMIT - 1) // _FUNDING_BATCH_LIMIT,
+                    )
             elif kind == "open_interest":
                 if task.market_type != "futures":
                     units += 1
@@ -665,9 +907,8 @@ class MarketImportService:
                     if eff_start > eff_end:
                         units += 1
                     else:
-                        p_ms = _interval_to_milliseconds(
-                            _timeframe_to_open_interest_period(task.timeframe)
-                        )
+                        # 说明（中文）：OI 永远按最小 period 估算进度（当前 5m），不随 task.timeframe。
+                        p_ms = int(_cap("open_interest").get("progress_interval_ms", 5 * 60_000))
                         sub = max(0, int(eff_end.timestamp() * 1000) - int(eff_start.timestamp() * 1000))
                         est_rows = max(1, sub // max(p_ms, 1) + 1)
                         units += max(
@@ -686,7 +927,8 @@ class MarketImportService:
         """Import klines for the configured range using paginated REST calls."""
         exchange = task.exchange
         symbol = task.symbol
-        interval = task.timeframe
+        # 说明（中文）：kline 永远按 1m 拉取，避免用户/上层写入非 1m 导致粒度不一致。
+        interval = _cap("kline").get("effective_interval", "1m")
         mt_store = task.market_type
         mt_parse = _parser_market_type(mt_store)
         start_ms = int(task.start_date.timestamp() * 1000)
@@ -746,7 +988,14 @@ class MarketImportService:
             if len(raw) < limit:
                 break
 
-        return rows_saved, {"status": "ok", "rows": rows_saved}
+        eg = _effective_granularity_for_task(task, "kline")
+        return rows_saved, {
+            "status": "ok",
+            "rows": rows_saved,
+            "effective_interval": eg.get("effective_interval", interval),
+            "effective_mode": eg.get("mode"),
+            "effective_explain": eg.get("explain"),
+        }
 
     async def _import_trades(
         self,
@@ -811,6 +1060,7 @@ class MarketImportService:
             await session.commit()
             return 0, {"status": "skipped", "reason": "spot_not_supported"}
 
+        eg = _effective_granularity_for_task(task, "funding_rate")
         start_ms = int(task.start_date.timestamp() * 1000)
         end_exclusive_ms = _inclusive_end_to_exclusive_ms(task.end_date)
         cursor = start_ms
@@ -843,7 +1093,13 @@ class MarketImportService:
             if len(rows) < _FUNDING_BATCH_LIMIT:
                 break
 
-        return rows_saved, {"status": "ok", "rows": rows_saved}
+        return rows_saved, {
+            "status": "ok",
+            "rows": rows_saved,
+            "effective_period": eg.get("effective_period", _cap("funding_rate").get("effective_period", "8h")),
+            "effective_mode": eg.get("mode"),
+            "effective_explain": eg.get("explain"),
+        }
 
     async def _import_open_interest(
         self,
@@ -865,7 +1121,9 @@ class MarketImportService:
         eff_start, eff_end, partial = crop_open_interest_range(
             task.start_date, task.end_date, now
         )
-        period = _timeframe_to_open_interest_period(task.timeframe)
+        # 说明（中文）：open_interest 永远使用交易所最小 period（当前 5m），不做 1m 插值/对齐。
+        period = _cap("open_interest").get("effective_period", "5m")
+        eg = _effective_granularity_for_task(task, "open_interest")
 
         if eff_start > eff_end:
             errors.append(
@@ -879,7 +1137,10 @@ class MarketImportService:
             return 0, {
                 "status": "empty",
                 "partial": True,
-                "period": period,
+                "period": period,  # legacy field
+                "effective_period": eg.get("effective_period", period),
+                "effective_mode": eg.get("mode"),
+                "effective_explain": eg.get("explain"),
             }
 
         start_ms = int(eff_start.timestamp() * 1000)
@@ -921,7 +1182,10 @@ class MarketImportService:
             "status": "ok",
             "rows": rows_saved,
             "partial": partial,
-            "period": period,
+            "period": period,  # legacy field
+            "effective_period": eg.get("effective_period", period),
+            "effective_mode": eg.get("mode"),
+            "effective_explain": eg.get("explain"),
             "effective_start": eff_start.isoformat(),
             "effective_end": eff_end.isoformat(),
         }

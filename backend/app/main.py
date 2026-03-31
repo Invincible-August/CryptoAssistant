@@ -15,6 +15,8 @@ from app.api.router import api_router
 from app.indicators import register_all_indicators
 from app.factors import register_all_factors
 from app.datafeeds.runtime import init_datafeeds
+from app.tasks.scheduler import task_scheduler
+from app.services.market_auto_update_service import reconcile_jobs
 from loguru import logger
 
 
@@ -39,6 +41,12 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"Redis连接失败，系统将不使用缓存: {e}")
 
+    # 启动任务调度器（APScheduler）
+    # 说明：
+    # - Task5 要求使用 Redis 锁做互斥，因此即使 Redis 连接失败，自动更新也会“保守跳过”；
+    # - 调度器是进程内组件，需在应用启动时显式 start。
+    task_scheduler.start()
+
     # 注册指标和因子插件
     register_all_indicators()
     register_all_factors()
@@ -49,6 +57,17 @@ async def lifespan(app: FastAPI):
         await init_datafeeds()
     except Exception as exc:  # noqa: BLE001
         logger.warning("数据源初始化失败，系统仍可使用缓存模式: %s", exc)
+
+    # 自动更新：启动时 reconcile 一次，并每 60 秒兜底 reconcile 一次（spec 强制）
+    try:
+        await reconcile_jobs()
+        task_scheduler.add_interval_job(
+            reconcile_jobs,
+            seconds=60,
+            job_id="market_auto_update_reconcile",
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(f"自动更新 reconcile 初始化失败（不影响主服务启动）: {exc}")
 
     logger.info(f"系统启动完成 - 访问 http://{settings.APP_HOST}:{settings.APP_PORT}/docs 查看API文档")
 

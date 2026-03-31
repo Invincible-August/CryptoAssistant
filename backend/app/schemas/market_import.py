@@ -18,6 +18,8 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 # - Using Literal makes client-side validation and OpenAPI docs clearer.
 MarketImportStatus = Literal["pending", "running", "completed", "failed"]
 
+_ALLOWED_IMPORT_TYPES: set[str] = {"kline", "open_interest", "funding_rate"}
+
 def _require_tz_aware(value: datetime, *, field_name: str) -> datetime:
     """
     Require timezone-aware datetimes.
@@ -55,7 +57,14 @@ class MarketImportCreateRequest(BaseModel):
     exchange: str = Field(..., max_length=32, description="交易所标识，例如 binance")
     market_type: str = Field(..., max_length=32, description="市场类型，例如 spot / futures")
     symbol: str = Field(..., max_length=64, description="交易对，例如 BTCUSDT")
-    timeframe: str = Field(..., max_length=16, description="时间周期，例如 1m / 1h / 1d")
+    # 说明（重要）：
+    # - timeframe 由服务端控制：即使客户端传入，也会在 API 层强制覆盖为 1m
+    # - 这里将其改为可选，避免客户端误以为可以通过传参改变实际导入粒度
+    timeframe: Optional[str] = Field(
+        default=None,
+        max_length=16,
+        description="时间周期（可选；服务端将强制覆盖为 1m）",
+    )
 
     start_date: datetime = Field(..., description="导入开始时间（包含）")
     end_date: datetime = Field(..., description="导入结束时间（包含）")
@@ -64,6 +73,28 @@ class MarketImportCreateRequest(BaseModel):
         default_factory=list,
         description="导入类型列表，例如 ['kline','trade']（JSON存储）",
     )
+
+    @field_validator("import_types")
+    @classmethod
+    def validate_import_types_allowlist(cls, value: List[str]) -> List[str]:
+        """
+        Validate import_types against a strict allowlist.
+
+        Notes:
+            - We enforce this at the schema layer so FastAPI can return 422 before
+              reaching the handler.
+            - The allowlist is part of the public API contract; error message must
+              include all allowed values for client-side fixes.
+        """
+        # 说明：入参可能为空列表；空表示“由服务端默认策略决定”，这里不强制要求至少一个
+        unknown_types = sorted({t for t in (value or []) if t not in _ALLOWED_IMPORT_TYPES})
+        if unknown_types:
+            allowed = sorted(_ALLOWED_IMPORT_TYPES)
+            raise ValueError(
+                f"import_types contains unsupported values: {unknown_types}. "
+                f"Allowed values: {allowed}"
+            )
+        return value
 
     @field_validator("start_date", "end_date")
     @classmethod

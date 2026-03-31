@@ -59,3 +59,10 @@ def time_ago(dt: datetime) -> str:
         return f"{seconds // 86400}天前"
     else:
         return format_datetime(dt)
+
+
+def remove_tz(dt):
+    """将带时区的 datetime 转换为 UTC 无时区的 datetime"""
+    if dt and dt.tzinfo is not None:
+        return dt.astimezone(timezone.utc).replace(tzinfo=None)
+    return dt

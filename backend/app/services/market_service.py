@@ -22,7 +22,7 @@ from app.models.market_trade import MarketTrade
 from app.models.market_orderbook_snapshot import MarketOrderbookSnapshot
 from app.models.market_funding import MarketFunding
 from app.models.market_open_interest import MarketOpenInterest
-
+from app.utils.time import remove_tz
 
 # ==================== Redis 缓存键前缀 ====================
 _CACHE_PREFIX_KLINE = "market:kline"
@@ -48,7 +48,7 @@ async def save_kline(db: AsyncSession, kline_data: Dict[str, Any]) -> MarketKlin
     保存一条K线数据到数据库。
 
     如果相同的 (exchange, symbol, market_type, interval, open_time) 组合已存在，
-    则更新现有记录（upsert 语义由调用方或唯一约束保证）。
+    则更新现有记录（本函数基于 uq_kline_identity 实现 upsert 覆盖写入）。
 
     Args:
         db: 异步数据库会话
@@ -57,28 +57,68 @@ async def save_kline(db: AsyncSession, kline_data: Dict[str, Any]) -> MarketKlin
     Returns:
         持久化后的 MarketKline 对象
     """
-    kline = MarketKline(
-        exchange=kline_data["exchange"],
-        symbol=kline_data["symbol"],
-        market_type=kline_data["market_type"],
-        interval=kline_data["interval"],
-        open_time=kline_data["open_time"],
-        close_time=kline_data["close_time"],
-        open=Decimal(str(kline_data["open"])),
-        high=Decimal(str(kline_data["high"])),
-        low=Decimal(str(kline_data["low"])),
-        close=Decimal(str(kline_data["close"])),
-        volume=Decimal(str(kline_data["volume"])),
-        quote_volume=Decimal(str(kline_data["quote_volume"])),
-        trade_count=kline_data.get("trade_count"),
+    exchange = kline_data["exchange"]
+    symbol = kline_data["symbol"]
+    market_type = kline_data["market_type"]
+    interval = kline_data["interval"]
+
+    # 统一去除时区信息，保持 DB naive=UTC 的约定
+    open_time = remove_tz(kline_data["open_time"])
+    close_time = remove_tz(kline_data["close_time"])
+
+    open_price = Decimal(str(kline_data["open"]))
+    high_price = Decimal(str(kline_data["high"]))
+    low_price = Decimal(str(kline_data["low"]))
+    close_price = Decimal(str(kline_data["close"]))
+    volume = Decimal(str(kline_data["volume"]))
+    quote_volume = Decimal(str(kline_data["quote_volume"]))
+
+    # 成交笔数在不同数据源可能缺失；为保持下游统计一致性，这里统一写入 0
+    trade_count_raw = kline_data.get("trade_count")
+    trade_count = 0 if trade_count_raw is None else int(trade_count_raw)
+
+    # 说明：
+    # - (exchange, symbol, market_type, interval, open_time) 是天然的幂等键
+    # - 同一根 K 线可能被交易所回补/修正，因此冲突时需要覆盖完整的 OHLCV 等字段
+    stmt = (
+        pg_insert(MarketKline)
+        .values(
+            exchange=exchange,
+            symbol=symbol,
+            market_type=market_type,
+            interval=interval,
+            open_time=open_time,
+            close_time=close_time,
+            open=open_price,
+            high=high_price,
+            low=low_price,
+            close=close_price,
+            volume=volume,
+            quote_volume=quote_volume,
+            trade_count=trade_count,
+        )
+        .on_conflict_do_update(
+            constraint="uq_kline_identity",
+            set_={
+                "close_time": close_time,
+                "open": open_price,
+                "high": high_price,
+                "low": low_price,
+                "close": close_price,
+                "volume": volume,
+                "quote_volume": quote_volume,
+                "trade_count": trade_count,
+            },
+        )
+        .returning(MarketKline.id)
     )
 
-    db.add(kline)
-    await db.flush()
+    result = await db.execute(stmt)
+    kline_pk = result.scalar_one()
+    kline_result = await db.execute(select(MarketKline).where(MarketKline.id == kline_pk))
+    kline = kline_result.scalar_one()
 
-    logger.debug(
-        f"K线数据已保存: {kline.symbol} {kline.interval} @ {kline.open_time}"
-    )
+    logger.debug(f"K线数据已保存(幂等): {kline.symbol} {kline.interval} @ {kline.open_time}")
     return kline
 
 
@@ -90,6 +130,7 @@ async def get_klines(
     interval: str,
     start_time: Optional[datetime] = None,
     end_time: Optional[datetime] = None,
+    end_exclusive: Optional[datetime] = None,
     limit: int = 500,
 ) -> List[MarketKline]:
     """
@@ -105,11 +146,18 @@ async def get_klines(
         interval: K线周期
         start_time: 开始时间（可选）
         end_time: 结束时间（可选）
+        end_exclusive: 结束时间（可选，闭开语义：open_time < end_exclusive）。若提供则优先生效，用于窗口聚合/回补对齐。
         limit: 返回最大条数
 
     Returns:
         MarketKline 对象列表
     """
+    # 说明（重要）：本仓库 DB 内时间字段约定为 naive=UTC（见 save_kline/remove_tz）。
+    # 因此查询入参也必须统一为 naive=UTC，避免 aware 与 naive 混用导致比较异常或隐性偏移。
+    start_time_naive = remove_tz(start_time) if start_time else None
+    end_time_naive = remove_tz(end_time) if end_time else None
+    end_exclusive_naive = remove_tz(end_exclusive) if end_exclusive else None
+
     query = select(MarketKline).where(
         and_(
             MarketKline.exchange == exchange,
@@ -119,10 +167,17 @@ async def get_klines(
         )
     )
 
-    if start_time:
-        query = query.where(MarketKline.open_time >= start_time)
-    if end_time:
-        query = query.where(MarketKline.open_time <= end_time)
+    if start_time_naive:
+        query = query.where(MarketKline.open_time >= start_time_naive)
+
+    # 说明：为了保持向后兼容：
+    # - 旧参数 end_time 语义为“包含式” (<=)
+    # - 新参数 end_exclusive 语义为“闭开” (<)
+    # 若两者同时提供，则以 end_exclusive 为准（更严格、更适合时间窗聚合）。
+    if end_exclusive_naive:
+        query = query.where(MarketKline.open_time < end_exclusive_naive)
+    elif end_time_naive:
+        query = query.where(MarketKline.open_time <= end_time_naive)
 
     query = query.order_by(MarketKline.open_time.asc()).limit(limit)
 

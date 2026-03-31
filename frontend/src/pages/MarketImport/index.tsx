@@ -28,8 +28,6 @@ const { RangePicker } = DatePicker
 
 const IMPORT_TYPE_OPTIONS = [
   { label: 'K线 (kline)', value: 'kline' },
-  { label: '聚合成交 (trades)', value: 'trades' },
-  { label: '订单簿 (orderbook)', value: 'orderbook' },
   { label: '资金费率 (funding_rate)', value: 'funding_rate' },
   { label: '持仓量 (open_interest)', value: 'open_interest' },
 ]
@@ -99,7 +97,6 @@ export default function MarketImport() {
     exchange: string
     market_type: string
     symbol: string
-    timeframe: string
     dateRange: [Dayjs, Dayjs]
     import_types: string[]
   }) => {
@@ -122,7 +119,6 @@ export default function MarketImport() {
         exchange: values.exchange,
         market_type: values.market_type,
         symbol: values.symbol,
-        timeframe: values.timeframe,
         start_date,
         end_date,
         import_types: values.import_types,
@@ -151,7 +147,8 @@ export default function MarketImport() {
     <div>
       <Typography.Title level={3}>导入行情</Typography.Title>
       <Typography.Paragraph type="secondary" style={{ marginBottom: 16 }}>
-        从交易所拉取历史行情数据到本地数据库。创建任务后约每 {POLL_MS / 1000} 秒自动刷新进度。
+        从交易所拉取历史行情数据到本地数据库。K 线固定按 1m 导入；持仓量/资金费率按交易所最小可用粒度导入（不插值、不对齐到 1m）。
+        创建任务后约每 {POLL_MS / 1000} 秒自动刷新进度。
       </Typography.Paragraph>
 
       <Card title="新建导入任务" style={{ marginBottom: 16 }}>
@@ -163,7 +160,6 @@ export default function MarketImport() {
             exchange: 'binance',
             symbol: 'BTCUSDT',
             market_type: 'spot',
-            timeframe: '1h',
             import_types: ['kline'],
             dateRange: [dayjs().subtract(7, 'day'), dayjs()],
           }}
@@ -196,17 +192,6 @@ export default function MarketImport() {
             </Col>
           </Row>
           <Row gutter={16}>
-            <Col span={6}>
-              <Form.Item label="K 线周期" name="timeframe" rules={[{ required: true }]}>
-                <Select
-                  options={[
-                    { label: '1 小时', value: '1h' },
-                    { label: '4 小时', value: '4h' },
-                    { label: '1 天', value: '1d' },
-                  ]}
-                />
-              </Form.Item>
-            </Col>
             <Col span={12}>
               <Form.Item
                 label="时间范围（UTC 日界线）"

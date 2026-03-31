@@ -57,6 +57,16 @@ class Settings(BaseSettings):
     LOG_LEVEL: str = "INFO"
     LOG_FILE: str = "logs/app.log"
 
+    # ==================== 行情自动增量更新（symbol_watches -> 1m backfill） ====================
+    # 说明：
+    # - enabled 为总开关；关闭时不会注册定时任务；
+    # - default_minutes 为全局默认拉取周期（分钟），可被单条 watch 的 config_json.update_minutes 覆盖；
+    # - safety_lookback_minutes 为安全回看（分钟），用于每次增量回补时向前多拉一小段，防止边界漏数据/延迟写入；
+    # - 所有时间语义统一按 UTC，并按“已完成分钟”对齐（见 spec）。
+    MARKET_AUTO_UPDATE_ENABLED: bool = True
+    MARKET_AUTO_UPDATE_DEFAULT_MINUTES: int = 1
+    MARKET_AUTO_UPDATE_SAFETY_LOOKBACK_MINUTES: int = 3
+
     # ==================== 前端配置 ====================
     FRONTEND_URL: str = "http://localhost:5173"
     CORS_ORIGINS: List[str] = ["http://localhost:5173", "http://localhost:3000"]

@@ -179,9 +179,14 @@ async def test_get_open_interest_history_forwards_request_params(
 async def test_request_passes_proxy_when_use_proxy_and_env_set(
     monkeypatch: pytest.MonkeyPatch, rest_client: BinanceRestClient
 ) -> None:
-    """When use_proxy is True and HTTPS_PROXY is set, httpx receives proxy."""
+    """When use_proxy is True and HTTPS_PROXY is set, httpx proxy client is used."""
 
     monkeypatch.setenv("HTTPS_PROXY", "http://127.0.0.1:8888")
+
+    # 说明：
+    # - httpx 0.28.x 的代理是通过 AsyncClient(proxy=...) 绑定，而不是 request(proxy=...)
+    # - 该测试通过 monkeypatch httpx.AsyncClient 构造器来捕获 proxy 入参，避免真实网络请求
+    from app.datafeeds.exchanges.binance import rest_client as rest_client_module
 
     class FakeResponse:
         status_code = 200
@@ -189,11 +194,19 @@ async def test_request_passes_proxy_when_use_proxy_and_env_set(
         def json(self):
             return {"ok": True}
 
-    mock_request = AsyncMock(return_value=FakeResponse())
+    created: list[dict] = []
 
-    await rest_client.init()
-    assert rest_client._client is not None
-    monkeypatch.setattr(rest_client._client, "request", mock_request)
+    class FakeAsyncClient:
+        def __init__(self, *args, **kwargs):
+            created.append({"proxy": kwargs.get("proxy")})
+
+        async def request(self, *args, **kwargs):
+            return FakeResponse()
+
+        async def aclose(self):
+            return None
+
+    monkeypatch.setattr(rest_client_module.httpx, "AsyncClient", FakeAsyncClient)
 
     await rest_client._request(
         "GET",
@@ -203,16 +216,15 @@ async def test_request_passes_proxy_when_use_proxy_and_env_set(
         use_proxy=True,
     )
 
-    mock_request.assert_awaited_once()
-    _args, kwargs = mock_request.call_args
-    assert kwargs.get("proxy") == "http://127.0.0.1:8888"
+    # 必须创建过一个 proxy client，且 proxy URL 来自 HTTPS_PROXY
+    assert any(x["proxy"] == "http://127.0.0.1:8888" for x in created)
 
 
 @pytest.mark.asyncio
 async def test_request_prefers_settings_binance_proxy_url_when_enabled(
     monkeypatch: pytest.MonkeyPatch, rest_client: BinanceRestClient
 ) -> None:
-    """When BINANCE_PROXY_ENABLED and BINANCE_PROXY_URL are set, use URL without env."""
+    """When BINANCE_PROXY_ENABLED and BINANCE_PROXY_URL are set, use settings proxy."""
 
     monkeypatch.delenv("HTTPS_PROXY", raising=False)
     monkeypatch.delenv("HTTP_PROXY", raising=False)
@@ -224,17 +236,27 @@ async def test_request_prefers_settings_binance_proxy_url_when_enabled(
         raising=False,
     )
 
+    from app.datafeeds.exchanges.binance import rest_client as rest_client_module
+
     class FakeResponse:
         status_code = 200
 
         def json(self):
             return {"ok": True}
 
-    mock_request = AsyncMock(return_value=FakeResponse())
+    created: list[dict] = []
 
-    await rest_client.init()
-    assert rest_client._client is not None
-    monkeypatch.setattr(rest_client._client, "request", mock_request)
+    class FakeAsyncClient:
+        def __init__(self, *args, **kwargs):
+            created.append({"proxy": kwargs.get("proxy")})
+
+        async def request(self, *args, **kwargs):
+            return FakeResponse()
+
+        async def aclose(self):
+            return None
+
+    monkeypatch.setattr(rest_client_module.httpx, "AsyncClient", FakeAsyncClient)
 
     await rest_client._request(
         "GET",
@@ -244,9 +266,7 @@ async def test_request_prefers_settings_binance_proxy_url_when_enabled(
         use_proxy=True,
     )
 
-    mock_request.assert_awaited_once()
-    _args, kwargs = mock_request.call_args
-    assert kwargs.get("proxy") == "http://proxy-from-settings.example:3128"
+    assert any(x["proxy"] == "http://proxy-from-settings.example:3128" for x in created)
 
 
 @pytest.mark.asyncio
@@ -264,17 +284,27 @@ async def test_request_settings_proxy_wins_over_env_when_both_set(
         raising=False,
     )
 
+    from app.datafeeds.exchanges.binance import rest_client as rest_client_module
+
     class FakeResponse:
         status_code = 200
 
         def json(self):
             return {"ok": True}
 
-    mock_request = AsyncMock(return_value=FakeResponse())
+    created: list[dict] = []
 
-    await rest_client.init()
-    assert rest_client._client is not None
-    monkeypatch.setattr(rest_client._client, "request", mock_request)
+    class FakeAsyncClient:
+        def __init__(self, *args, **kwargs):
+            created.append({"proxy": kwargs.get("proxy")})
+
+        async def request(self, *args, **kwargs):
+            return FakeResponse()
+
+        async def aclose(self):
+            return None
+
+    monkeypatch.setattr(rest_client_module.httpx, "AsyncClient", FakeAsyncClient)
 
     await rest_client._request(
         "GET",
@@ -284,5 +314,4 @@ async def test_request_settings_proxy_wins_over_env_when_both_set(
         use_proxy=True,
     )
 
-    _args, kwargs = mock_request.call_args
-    assert kwargs.get("proxy") == "http://preferred.example:8080"
+    assert any(x["proxy"] == "http://preferred.example:8080" for x in created)

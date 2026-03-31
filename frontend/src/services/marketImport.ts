@@ -14,7 +14,6 @@ export interface MarketImportCreatePayload {
   exchange: string
   market_type: string
   symbol: string
-  timeframe: string
   start_date: string
   end_date: string
   import_types: string[]

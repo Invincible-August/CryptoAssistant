@@ -105,7 +105,13 @@ npm run dev
 ### 7. 访问系统
 
 - 前端界面: http://localhost:5173
-- 导入行情（导入历史数据）：前端菜单「导入行情」，创建导入任务后会自动轮询进度（支持 `kline` / `trades` / `funding_rate` / `open_interest`；`orderbook` 在 MVP 下会标记为不支持历史回放）
+- 导入行情（导入历史数据）：前端菜单「导入行情」，创建导入任务后会自动轮询进度（当前 API/前端仅开放 `kline` / `open_interest` / `funding_rate` 三类；其余类型属于历史遗留/预留能力，不作为对外契约）
+  - **最小可用粒度自动降级（Task3）**：导入执行器会按交易所能力强制选择有效粒度（不插值/不对齐到 1m）
+    - `kline`：永远按 **1m** 拉取（即使任务表里出现非 1m 的 timeframe，也不会按其拉取）
+    - `open_interest`：永远按交易所最小 period（当前 **5m**）拉取，不做 1m 插值
+    - `funding_rate`：按事件粒度拉取（通常 **8h/次**），不插值
+  - **导入进度日志（Task4）**：导入过程中后端会持续输出进度日志（包含 task name、symbol、import_type、progress 0-100%），并按 **task_id 维度 5 秒节流**，且 progress **单调不下降**；任务结束会强制输出至少一条 **100%** 日志（无需真实 sleep，时间源可注入便于单测）。
+  - 导入完成后 `result_json.type_results.*` 会记录 `effective_interval/effective_period` 等字段，并在 `result_json.summary.effective_granularity` 汇总，便于前端展示与排障。
 - API文档: http://localhost:8000/docs
 - 默认账号: `admin` / `admin123456`
 
@@ -199,9 +205,35 @@ TradingAgent/
 - **后端**：`GET /api/v1/chart/bundle`（需登录），查询参数：`symbol`、`timeframe`、`exchange`、`market_type`、`limit`、`indicators`（逗号分隔指标 key，留空则仅 K 线）。返回 `config`、`candlestick`、`overlays`、`subcharts`、`meta`（含 `failed_indicators`）。
   - 新增：`source_mode=cache|live`（默认 `cache`）与 `force_refresh=true`（等价别名，等价于 `source_mode=live`）
   - 新增：`use_proxy=true|false`（默认 `false`）。当 `source_mode=live` 且 `exchange=binance` 时，可通过本地 HTTP 代理访问 Binance REST 接口（用于网络受限环境）。
-  - `live` 模式由 `MarketDataProvider` 走交易所实时拉取并回写缓存（当前仅 `binance` adapter 已实现；OKX/Bitget 需后续补充适配器）
+  - `live` 模式行为（重要）：
+    - 当 `exchange=binance`：点击图表页「强制刷新（实时）」会**固定回补最近 7 天的 Binance 1m K 线**（分批拉取，写库为 upsert 覆盖），然后在后端基于 1m **按 UTC 自然边界聚合**为请求的 `timeframe` 并返回；桶内若缺任意 1m 则丢弃该桶（保证语义一致）。
+    - 当 `exchange!=binance`：暂沿用旧的 live 路径（按请求的 `timeframe/limit` 拉取），不做 7 天 1m 回补（非本次目标）。
+  - `meta` 额外包含（便于排障/观测）：
+    - `backfill_window_days`：回补窗口天数（当前为 7）
+    - `aggregation_source_interval`：聚合来源粒度（当前为 `"1m"`）
+    - `dropped_total`：聚合时因缺口/不严格匹配而丢弃的桶数量
 - **与 TradingView 模块的关系**：TradingView webhook 与 `TradingView` 兼容接口已移除；本接口仅返回 Lightweight Charts 数据包。
 - **前端**：`/chart` 页面使用 `lightweight-charts` 渲染；需已导入 K 线数据（如 `scripts/seed_demo_data.py`）。
+
+## 监听币种自动增量更新（symbol_watches -> 1m 回补入库）
+
+系统会对 `symbol_watches` 中满足以下条件的记录，按分钟周期自动增量拉取 Binance **1m** K 线并 **upsert 覆盖入库**：
+
+- 监听集合：`watch_status='active'` 且 `event_type='kline'`
+- 生效周期（分钟）：
+  - 全局默认：`MARKET_AUTO_UPDATE_DEFAULT_MINUTES`
+  - 单条覆盖：`symbol_watches.config_json.update_minutes`
+- 每次执行仅增量拉取窗口（UTC，闭开区间）：`[start, end_exclusive)`
+  - `end_exclusive` 按“已完成分钟”对齐（避免正在形成的分钟抖动）
+  - `start = last_success_time - safety_lookback`
+  - `last_success_time` 优先从 `config_json.last_success_time` 读取，否则回退为 DB 最后一根 1m open_time，再回退为 `end_exclusive - safety_lookback`
+- 同一 watch_id 互斥：使用 Redis 锁 `market:auto_update:lock:{watch_id}`，抢不到锁则跳过本轮（避免并发重复拉取导致限频）
+
+新增/相关环境变量（见 `backend/app/core/config.py`）：
+
+- `MARKET_AUTO_UPDATE_ENABLED`：自动更新总开关（默认 true）
+- `MARKET_AUTO_UPDATE_DEFAULT_MINUTES`：全局默认更新周期（分钟，默认 1）
+- `MARKET_AUTO_UPDATE_SAFETY_LOOKBACK_MINUTES`：安全回看分钟数（默认 3）
 
 ## 自定义指标示例
 

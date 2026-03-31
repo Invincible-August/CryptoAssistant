@@ -3,6 +3,7 @@
 提供K线、成交、深度、资金费率、持仓量等数据查询接口。
 """
 from fastapi import APIRouter, Depends, Query, HTTPException
+from loguru import logger
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, desc
 from app.api.deps import get_db, get_current_user
@@ -41,13 +42,16 @@ async def create_market_import(
     if payload.start_date > payload.end_date:
         raise HTTPException(status_code=400, detail="start_date must be <= end_date")
 
+    # 说明（重要）：无论客户端是否传入 timeframe，都强制使用 1m
+    effective_timeframe = "1m"
+
     task = MarketImportTask(
         name=payload.name,
         created_by=user.id,
         exchange=payload.exchange,
         market_type=payload.market_type,
         symbol=payload.symbol,
-        timeframe=payload.timeframe,
+        timeframe=effective_timeframe,
         start_date=payload.start_date,
         end_date=payload.end_date,
         import_types=list(payload.import_types or []),
@@ -56,6 +60,17 @@ async def create_market_import(
     )
     db.add(task)
     await db.flush()
+
+    # 说明：若客户端显式传了非 1m 的 timeframe，需要打点日志，便于排查前端/调用方误用
+    if payload.timeframe is not None and payload.timeframe != effective_timeframe:
+        logger.info(
+            "client_timeframe_overridden",
+            task_id=task.id,
+            symbol=task.symbol,
+            client_timeframe=payload.timeframe,
+            effective_timeframe=effective_timeframe,
+        )
+
     # Ensure the background worker can read this task via a new DB session.
     # `flush()` alone is not visible across sessions until `commit()`.
     await db.commit()
