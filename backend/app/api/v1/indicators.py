@@ -5,14 +5,28 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, desc
-from app.api.deps import get_db, get_current_user
+from app.api.deps import get_db, get_current_user, get_admin_user
 from app.models.user import User
 from app.models.indicator_result import IndicatorResult
 from app.indicators.registry import indicator_registry
 from app.schemas.common import ResponseBase
-from app.schemas.indicators import IndicatorCalcRequest
+from app.schemas.indicators import IndicatorCalcRequest, IndicatorPluginLoadRequest
+from app.services.plugin_runtime_service import get_plugin_runtime_service
 
 router = APIRouter()
+
+
+def _attach_indicator_load_flags(metadata_list: list) -> list:
+    """Merge ``load_enabled`` from plugin_runtime into indicator metadata dicts."""
+    runtime = get_plugin_runtime_service()
+    disabled = runtime.get_disabled_indicators()
+    out = []
+    for meta in metadata_list:
+        row = dict(meta) if isinstance(meta, dict) else dict(meta)
+        ik = row.get("indicator_key", "")
+        row["load_enabled"] = ik not in disabled
+        out.append(row)
+    return out
 
 
 @router.get("/", response_model=ResponseBase, summary="获取所有指标列表")
@@ -25,6 +39,7 @@ async def list_indicators(
         indicators = indicator_registry.list_by_source(source)
     else:
         indicators = indicator_registry.list_all()
+    indicators = _attach_indicator_load_flags(indicators)
     return ResponseBase(data=indicators)
 
 
@@ -36,7 +51,9 @@ async def get_indicator_meta(
     """获取指定指标的元数据"""
     try:
         indicator_cls = indicator_registry.get(key)
-        return ResponseBase(data=indicator_cls.get_metadata())
+        meta = indicator_cls.get_metadata()
+        enriched = _attach_indicator_load_flags([meta])[0]
+        return ResponseBase(data=enriched)
     except KeyError:
         raise HTTPException(status_code=404, detail=f"指标 {key} 不存在")
 
@@ -45,12 +62,18 @@ async def get_indicator_meta(
 async def calculate_indicator(
     request: IndicatorCalcRequest,
     db: AsyncSession = Depends(get_db),
+    source_mode: str = Query(
+        "cache",
+        description="数据模式：cache=读缓存；live=实时拉取交易所并可回写缓存",
+    ),
     _user: User = Depends(get_current_user),
 ):
     """计算指定指标并返回结果"""
     from app.services.indicator_service import calculate_indicator as calc
 
     try:
+        if source_mode not in ("cache", "live"):
+            raise HTTPException(status_code=400, detail="source_mode 必须为 cache 或 live")
         result = await calc(
             db=db,
             indicator_key=request.indicator_key,
@@ -59,12 +82,45 @@ async def calculate_indicator(
             market_type=request.market_type,
             timeframe=request.timeframe,
             params=request.params or {},
+            source_mode=source_mode,
         )
         return ResponseBase(data=result)
     except KeyError as e:
         raise HTTPException(status_code=404, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"指标计算失败: {e}")
+
+
+@router.patch(
+    "/runtime/load-enabled",
+    response_model=ResponseBase,
+    summary="设置指标是否参与计算（写入 plugin_runtime.yaml）",
+)
+async def set_indicator_load_enabled(
+    body: IndicatorPluginLoadRequest,
+    _admin: User = Depends(get_admin_user),
+):
+    """Persist indicator load flag (admin only)."""
+    try:
+        indicator_registry.get(body.indicator_key)
+    except KeyError:
+        raise HTTPException(
+            status_code=404,
+            detail=f"未知指标: {body.indicator_key}",
+        )
+    runtime = get_plugin_runtime_service()
+    runtime.set_indicator_disabled(
+        body.indicator_key,
+        disabled=not body.load_enabled,
+    )
+    return ResponseBase(
+        data={
+            "indicator_key": body.indicator_key,
+            "load_enabled": body.load_enabled,
+        }
+    )
 
 
 @router.get("/results", response_model=ResponseBase, summary="查询指标结果")

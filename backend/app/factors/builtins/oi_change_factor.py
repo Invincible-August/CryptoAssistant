@@ -96,6 +96,20 @@ class OIChangeFactor(BaseFactor):
         oi_data: List[Dict[str, Any]] = context.get("open_interest", [])
         kline_data: List[Dict[str, Any]] = context.get("kline", [])
 
+        # 兼容：某些路径传入的是 dict / pandas.DataFrame
+        try:
+            import pandas as pd  # type: ignore
+
+            if isinstance(kline_data, pd.DataFrame):
+                kline_data = kline_data.to_dict("records")  # type: ignore[assignment]
+        except Exception:  # noqa: BLE001
+            pass
+
+        if isinstance(oi_data, dict):
+            # 期望结构：[{ "oi": <value>, ... }]
+            oi_value = oi_data.get("open_interest", 0.0)
+            oi_data = [{"oi": oi_value, "event_time": oi_data.get("event_time")}]
+
         # 优雅降级：OI数据不可用时返回中性结果
         if not oi_data or len(oi_data) < period + 1:
             logger.debug(

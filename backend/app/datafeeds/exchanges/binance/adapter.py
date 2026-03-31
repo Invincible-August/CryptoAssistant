@@ -172,7 +172,11 @@ class BinanceAdapter(BaseExchangeAdapter):
     # ==========================================================================
 
     async def get_klines(
-        self, symbol: str, interval: str, limit: int = 500
+        self,
+        symbol: str,
+        interval: str,
+        limit: int = 500,
+        use_proxy: bool = False,
     ) -> List[Dict]:
         """
         获取历史K线数据，根据默认市场类型路由到现货或合约 API。
@@ -181,18 +185,19 @@ class BinanceAdapter(BaseExchangeAdapter):
             symbol: 交易对
             interval: K线周期
             limit: 返回条数
+            use_proxy: True 时通过本地 HTTP 代理访问 Binance REST（仅影响 REST）
 
         Returns:
             UnifiedKline 对象列表转为字典列表
         """
         if self._default_market_type == MarketType.PERPETUAL.value:
             raw_data = await self._rest_client.get_futures_klines(
-                symbol, interval, limit
+                symbol, interval, limit, use_proxy=use_proxy
             )
             market_type = "perp"
         else:
             raw_data = await self._rest_client.get_spot_klines(
-                symbol, interval, limit
+                symbol, interval, limit, use_proxy=use_proxy
             )
             market_type = "spot"
 

@@ -223,6 +223,36 @@ class FactorRegistry:
         logger.info("因子注册中心已清空")
 
     @classmethod
+    def unregister_plugin_packages(cls) -> int:
+        """
+        Remove factor classes whose defining module lives under plugin packages.
+
+        Used by hot-reload: drop builtins/custom entries before rescanning disk.
+
+        Returns:
+            int: Number of factor keys removed from the registry.
+        """
+        plugin_roots = ("app.factors.builtins", "app.factors.custom")
+
+        def _from_plugin(mod: str) -> bool:
+            return any(
+                mod == root or mod.startswith(f"{root}.") for root in plugin_roots
+            )
+
+        to_delete = [
+            key
+            for key, fac_cls in cls._factors.items()
+            if _from_plugin(fac_cls.__module__)
+        ]
+        for key in to_delete:
+            del cls._factors[key]
+        if to_delete:
+            logger.info(
+                f"因子注册中心按插件包卸载 {len(to_delete)} 个: {to_delete}"
+            )
+        return len(to_delete)
+
+    @classmethod
     def count(cls) -> int:
         """
         返回当前已注册因子总数。

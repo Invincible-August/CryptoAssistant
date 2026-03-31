@@ -102,9 +102,20 @@ class MomentumFactor(BaseFactor):
         # ---------- 获取K线数据 ----------
         kline_data: List[Dict[str, Any]] = context.get("kline", [])
 
+        # 兼容：某些执行路径传入的是 pandas.DataFrame（FeaturePipeline/单测）
+        # 这里统一转换为 list[dict] 供后续 candle["close"] 写法使用。
+        try:
+            import pandas as pd  # type: ignore
+
+            if isinstance(kline_data, pd.DataFrame):
+                kline_data = kline_data.to_dict("records")  # type: ignore[assignment]
+        except Exception:  # noqa: BLE001
+            pass
+
         # 数据量不足时返回中性默认值
         if len(kline_data) < period + acceleration_period:
             return {
+                "factor_key": cls.factor_key,
                 "roc": 0.0,
                 "acceleration": 0.0,
                 "trend_consistency": 0.0,
@@ -171,11 +182,26 @@ class MomentumFactor(BaseFactor):
         )
 
         return {
+            "factor_key": cls.factor_key,
             "roc": round(roc, 4),
             "acceleration": round(acceleration, 4),
             "trend_consistency": round(trend_consistency, 4),
             "momentum_score": round(momentum_score, 2),
         }
+
+    @classmethod
+    def normalize(cls, result: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Normalize to a unified scoring structure expected by the signal layer.
+
+        Tests (and downstream code) expect:
+          - `factor_key` to exist
+          - `score` to be present (0~100)
+        """
+        normalized = dict(result)
+        normalized["factor_key"] = cls.factor_key
+        normalized["score"] = float(result.get("momentum_score", 50.0))
+        return normalized
 
     @classmethod
     def _compute_momentum_score(

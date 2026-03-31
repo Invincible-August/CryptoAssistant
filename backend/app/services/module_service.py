@@ -22,7 +22,6 @@ from app.models.module_config import ModuleConfig
 # 环境变量中的模块开关映射：{模块名称: Settings 属性名}
 _ENV_MODULE_MAP: Dict[str, str] = {
     "ai": "MODULE_AI_ENABLED",
-    "tradingview": "MODULE_TRADINGVIEW_ENABLED",
     "execution": "MODULE_EXECUTION_ENABLED",
     "backtest": "MODULE_BACKTEST_ENABLED",
 }

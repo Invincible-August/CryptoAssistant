@@ -120,6 +120,15 @@ class VolatilityFactor(BaseFactor):
         # ---------- 获取K线数据 ----------
         kline_data: List[Dict[str, Any]] = context.get("kline", [])
 
+        # 兼容：FeaturePipeline/单测可能传入 pandas.DataFrame
+        try:
+            import pandas as pd  # type: ignore
+
+            if isinstance(kline_data, pd.DataFrame):
+                kline_data = kline_data.to_dict("records")  # type: ignore[assignment]
+        except Exception:  # noqa: BLE001
+            pass
+
         # 需要的最小K线数量取各参数周期的最大值加1
         min_required = max(atr_period, bb_period, hv_period) + 1
         if len(kline_data) < min_required:

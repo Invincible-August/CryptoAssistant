@@ -60,6 +60,18 @@ class IndicatorMeta(BaseModel):
     ai_compatible: bool = Field(default=False, description="是否支持 AI 分析引用")
 
 
+class IndicatorPluginLoadRequest(BaseModel):
+    """
+    Request body to enable or disable an indicator in plugin_runtime.yaml.
+    """
+
+    indicator_key: str = Field(..., min_length=1, description="Registered indicator_key")
+    load_enabled: bool = Field(
+        ...,
+        description="False = skip in calculate / pipelines",
+    )
+
+
 class IndicatorCalcRequest(BaseModel):
     """
     指标计算请求模型

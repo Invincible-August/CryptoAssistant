@@ -8,7 +8,7 @@
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class BacktestRequest(BaseModel):
@@ -18,12 +18,13 @@ class BacktestRequest(BaseModel):
     提交一个新的策略回测任务时使用的参数结构。
 
     Attributes:
-        name: 回测任务名称（便于区分和检索）
+        name: 回测任务名称（可选；若使用预设且留空则用预设 display_name）
         symbol: 交易对
         exchange: 交易所名称
         market_type: 市场类型
         timeframe: 回测 K 线周期
-        strategy_config: 策略配置 JSON，包含策略名及参数
+        strategy_preset_id: 策略预设 ID（对应 config/backtest_strategies/*.yaml 的 id）
+        strategy_config: 策略配置；与预设并用时深度合并覆盖预设缺省项
         start_date: 回测起始日期
         end_date: 回测结束日期
         initial_capital: 初始资金（USDT），默认 10000
@@ -31,14 +32,22 @@ class BacktestRequest(BaseModel):
         slippage: 滑点比例，默认 0.05%
     """
 
-    name: str = Field(..., max_length=100, description="回测任务名称")
+    name: str = Field(
+        default="",
+        max_length=100,
+        description="回测任务名称；可选，预设模式下可留空",
+    )
     symbol: str = Field(..., description="交易对")
     exchange: str = Field(default="binance", description="交易所名称")
     market_type: str = Field(default="spot", description="市场类型")
     timeframe: str = Field(default="1h", description="K线周期")
-    strategy_config: Dict[str, Any] = Field(
-        ...,
-        description="策略配置，如 {\"name\": \"macd_cross\", \"fast\": 12, \"slow\": 26}",
+    strategy_preset_id: Optional[str] = Field(
+        default=None,
+        description="策略预设 id（YAML）；与 strategy_config 二选一或组合使用",
+    )
+    strategy_config: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="策略配置；无预设时必填，有预设时与预设深度合并",
     )
     start_date: datetime = Field(..., description="回测起始日期")
     end_date: datetime = Field(..., description="回测结束日期")
@@ -57,6 +66,17 @@ class BacktestRequest(BaseModel):
         ge=0,
         description="滑点比例，如 0.0005 = 0.05%",
     )
+
+    @model_validator(mode="after")
+    def validate_strategy_inputs(self) -> "BacktestRequest":
+        """
+        Ensure at least one of preset id or inline strategy_config is provided.
+        """
+        if not self.strategy_preset_id and self.strategy_config is None:
+            raise ValueError(
+                "Either strategy_preset_id or strategy_config must be provided"
+            )
+        return self
 
 
 class BacktestTradeRecord(BaseModel):

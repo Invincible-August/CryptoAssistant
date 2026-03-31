@@ -6,6 +6,7 @@ Binance 合约 WebSocket 客户端模块。
 """
 import asyncio
 import json
+import inspect
 from typing import Any, Callable, Dict, Optional, Set
 
 import websockets
@@ -78,12 +79,23 @@ class BinanceFuturesWebSocket:
             ConnectionError: 无法建立连接时
         """
         try:
-            self._ws = await websockets.connect(
-                self._ws_url,
-                ping_interval=20,
-                ping_timeout=10,
-                max_size=10 * 1024 * 1024,
-            )
+            connect_kwargs: Dict[str, Any] = {
+                "ping_interval": 20,
+                "ping_timeout": 10,
+                "max_size": 10 * 1024 * 1024,
+            }
+
+            # 代理支持由 settings 控制；仅在当前 websockets 版本支持 `proxy` 参数时传入。
+            if settings.BINANCE_PROXY_ENABLED and settings.BINANCE_PROXY_URL:
+                if "proxy" in inspect.signature(websockets.connect).parameters:
+                    connect_kwargs["proxy"] = settings.BINANCE_PROXY_URL
+                else:
+                    raise RuntimeError(
+                        "当前 websockets 版本不支持 `proxy=` 参数，"
+                        "请升级 backend/requirements.txt 中 websockets 版本以启用 WebSocket 代理。"
+                    )
+
+            self._ws = await websockets.connect(self._ws_url, **connect_kwargs)
             self._is_running = True
 
             self._listen_task = asyncio.create_task(self._listen_loop())

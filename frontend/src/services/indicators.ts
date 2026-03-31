@@ -15,6 +15,12 @@ export const indicatorApi = {
     params?: Record<string, any>
   }) => request.post('/indicators/calculate', data),
 
+  setLoadEnabled: (indicator_key: string, load_enabled: boolean) =>
+    request.patch('/indicators/runtime/load-enabled', {
+      indicator_key,
+      load_enabled,
+    }),
+
   getResults: (symbol: string, indicatorKey: string, limit = 50) =>
     request.get('/indicators/results', {
       params: { symbol, indicator_key: indicatorKey, limit },

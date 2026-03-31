@@ -5,10 +5,11 @@ Binance 现货 WebSocket 客户端模块。
 """
 import asyncio
 import json
+import inspect
 from typing import Any, Callable, Dict, List, Optional, Set
 
 import websockets
-from websockets.exceptions import ConnectionClosed, InvalidStatusCode
+from websockets.exceptions import ConnectionClosed
 from loguru import logger
 
 from app.core.config import settings
@@ -21,7 +22,7 @@ from app.datafeeds.exchanges.binance.parser import (
 
 # ==================== Binance 现货 WebSocket 地址 ====================
 _SPOT_WS_URL = "wss://stream.binance.com:9443/ws"
-_SPOT_WS_TESTNET_URL = "wss://testnet.binance.vision/ws"
+_SPOT_WS_TESTNET_URL = "wss://stream.testnet.binance.vision/ws"
 
 # 单个连接最大订阅流数量（Binance 限制每个连接最多200个流）
 _MAX_STREAMS_PER_CONNECTION = 200
@@ -80,13 +81,24 @@ class BinanceSpotWebSocket:
             ConnectionError: 无法建立 WebSocket 连接时
         """
         try:
-            self._ws = await websockets.connect(
-                self._ws_url,
-                ping_interval=20,
-                ping_timeout=10,
+            connect_kwargs: Dict[str, Any] = {
+                "ping_interval": 20,
+                "ping_timeout": 10,
                 # 限制单条消息最大为 10MB，防止异常数据占用过多内存
-                max_size=10 * 1024 * 1024,
-            )
+                "max_size": 10 * 1024 * 1024,
+            }
+
+            # 代理支持由 settings 控制；仅在当前 websockets 版本支持 `proxy` 参数时传入。
+            if settings.BINANCE_PROXY_ENABLED and settings.BINANCE_PROXY_URL:
+                if "proxy" in inspect.signature(websockets.connect).parameters:
+                    connect_kwargs["proxy"] = settings.BINANCE_PROXY_URL
+                else:
+                    raise RuntimeError(
+                        "当前 websockets 版本不支持 `proxy=` 参数，"
+                        "请升级 backend/requirements.txt 中 websockets 版本以启用 WebSocket 代理。"
+                    )
+
+            self._ws = await websockets.connect(self._ws_url, **connect_kwargs)
             self._is_running = True
 
             # 启动后台消息监听协程

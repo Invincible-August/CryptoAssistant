@@ -66,7 +66,6 @@ export default function Dashboard() {
                 { label: 'PostgreSQL', status: '已连接', color: 'green' },
                 { label: 'Redis', status: '已连接', color: 'green' },
                 { label: 'AI模块', status: '未启用', color: 'default' },
-                { label: 'TradingView', status: '未启用', color: 'default' },
               ]}
               renderItem={(item: any) => (
                 <List.Item>

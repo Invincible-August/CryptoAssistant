@@ -1,0 +1,7 @@
+# Copy to backend/config/plugin_runtime.yaml or merge keys as needed.
+# Factors/indicators listed here stay visible in GET /factors and GET /indicators
+# but are skipped in calculate APIs and FeaturePipeline.
+disabled_factors:
+  - example_factor_key_to_disable
+disabled_indicators:
+  - example_indicator_key_to_disable

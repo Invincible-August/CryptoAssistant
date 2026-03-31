@@ -31,8 +31,11 @@ class Settings(BaseSettings):
     # 重要：绝对不要在代码中硬编码密钥，务必通过.env文件配置
     BINANCE_API_KEY: str = ""
     BINANCE_API_SECRET: str = ""
-    BINANCE_TESTNET: bool = True  # 默认使用测试网，生产环境需关闭
-    # 可选：REST 层 use_proxy=True 时，在 BINANCE_PROXY_ENABLED=true 且 URL 非空时优先使用（默认与本项目常见本地代理端口一致）
+    BINANCE_TESTNET: bool = False  # 默认使用主网（测试网 WebSocket 端点在部分环境下可能不可用）
+
+    # ==================== Binance 网络代理（WebSocket/REST 通用开关） ====================
+    # 中国大陆网络环境下通常需要走本地 HTTP 代理（例如 Clash/Surge）。
+    # 海外服务器部署时可将开关置为 false，避免不必要的代理链路。
     BINANCE_PROXY_ENABLED: bool = False
     BINANCE_PROXY_URL: str = "http://127.0.0.1:7890"
 
@@ -41,9 +44,12 @@ class Settings(BaseSettings):
     OPENAI_MODEL: str = "gpt-4"
     OPENAI_BASE_URL: str = "https://api.openai.com/v1"
 
+    # ==================== 插件热重载 ====================
+    # 生产环境可设为 False，禁止 POST /admin/plugins/reload
+    PLUGIN_HOT_RELOAD_ENABLED: bool = True
+
     # ==================== 模块开关 ====================
     MODULE_AI_ENABLED: bool = False          # AI助手模块
-    MODULE_TRADINGVIEW_ENABLED: bool = False  # TradingView信号接收模块
     MODULE_EXECUTION_ENABLED: bool = False    # 自动下单执行模块
     MODULE_BACKTEST_ENABLED: bool = True      # 回测模块（默认启用）
 
@@ -64,6 +70,8 @@ class Settings(BaseSettings):
         "env_file": [".env", "../.env"],
         "env_file_encoding": "utf-8",
         "case_sensitive": True,
+        # 允许忽略已移除模块遗留的环境变量（例如 TradingView 已移除后仍可能残留 MODULE_TRADINGVIEW_ENABLED）。
+        "extra": "ignore",
     }
 
 

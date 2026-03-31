@@ -4,7 +4,10 @@
 """
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, desc
+from copy import deepcopy
+from typing import Any, Dict, List
+
+from sqlalchemy import select, desc, and_
 from app.api.deps import get_db, get_current_user
 from app.models.user import User
 from app.models.backtest_task import BacktestTask
@@ -13,12 +16,34 @@ from app.models.market_kline import MarketKline
 from app.schemas.backtest import BacktestRequest
 from app.schemas.common import ResponseBase
 from app.backtest.engine import BacktestEngine
-from app.backtest.strategy_adapter import adapt_strategy_config
+from app.backtest.strategy_adapter import (
+    adapt_strategy_config,
+    get_strategy_factors,
+    get_strategy_indicators,
+)
 from app.backtest.reports import generate_text_report
+from app.services.backtest_strategy_presets import (
+    deep_merge_strategy_dict,
+    get_backtest_strategy_preset_service,
+)
+from app.services.market_data_provider import market_data_provider
 import pandas as pd
 from datetime import datetime
 
 router = APIRouter()
+
+
+@router.get("/strategies", response_model=ResponseBase, summary="列出回测策略预设")
+async def list_backtest_strategies(
+    _user: User = Depends(get_current_user),
+):
+    """
+    Scan ``config/backtest_strategies/*.yaml`` for presets (short TTL cache).
+
+    Returns id / display_name / description for UI dropdowns.
+    """
+    service = get_backtest_strategy_preset_service()
+    return ResponseBase(data=service.list_summaries())
 
 
 @router.post("/run", response_model=ResponseBase, summary="运行回测")
@@ -26,20 +51,113 @@ async def run_backtest(
     request: BacktestRequest,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
+    source_mode: str = Query(
+        "cache",
+        description="数据模式：cache=读缓存；live=实时拉取K线并回写缓存（当前按时间窗口估算需要K线条数）",
+    ),
 ):
     """创建并运行回测任务"""
-    # 加载历史K线数据
-    result = await db.execute(
-        select(MarketKline)
-        .where(
-            MarketKline.symbol == request.symbol,
-            MarketKline.interval == request.timeframe,
-            MarketKline.open_time >= request.start_date,
-            MarketKline.open_time <= request.end_date,
+    preset_id = request.strategy_preset_id
+    task_name = (request.name or "").strip()
+    merged_raw: Dict[str, Any]
+
+    if preset_id:
+        try:
+            preset = get_backtest_strategy_preset_service().get_preset_by_id(
+                preset_id
+            )
+        except KeyError:
+            return ResponseBase(
+                code=400,
+                message=f"未知策略预设: {preset_id}",
+            )
+        merged_raw = deep_merge_strategy_dict(
+            preset["strategy_config"],
+            request.strategy_config,
         )
-        .order_by(MarketKline.open_time)
-    )
-    klines = result.scalars().all()
+        if not task_name:
+            task_name = preset["display_name"]
+    else:
+        merged_raw = deepcopy(request.strategy_config or {})
+
+    if not task_name:
+        task_name = "Backtest"
+
+    strategy_config = adapt_strategy_config(merged_raw)
+
+    if source_mode not in ("cache", "live"):
+        raise HTTPException(status_code=400, detail="source_mode 必须为 cache 或 live")
+
+    klines: List[Dict[str, Any]] = []
+    if source_mode == "live":
+        # ---- live 模式：从 exchange 拉取“足够覆盖时间范围”的K线，再在本地过滤窗口 ----
+        interval_seconds_map = {
+            "1m": 60,
+            "3m": 180,
+            "5m": 300,
+            "15m": 900,
+            "30m": 1800,
+            "1h": 3600,
+            "2h": 7200,
+            "4h": 14400,
+            "6h": 21600,
+            "8h": 28800,
+            "12h": 43200,
+            "1d": 86400,
+        }
+        interval_seconds = interval_seconds_map.get(request.timeframe, 3600)
+        total_seconds = max(0.0, (request.end_date - request.start_date).total_seconds())
+        needed_bars = int(total_seconds // interval_seconds) + 2
+
+        # 适当冗余，避免边界导致 K 线不足
+        fetch_limit = max(100, int(needed_bars * 1.2))
+        fetch_limit = min(fetch_limit, 2000)
+
+        klines = await market_data_provider.get_klines(
+            db,
+            exchange=request.exchange,
+            market_type=request.market_type,
+            symbol=request.symbol,
+            interval=request.timeframe,
+            limit=fetch_limit,
+            source_mode="live",
+            persist_to_db=True,
+        )
+
+        filtered = [
+            k
+            for k in klines
+            if request.start_date <= k["open_time"] <= request.end_date
+        ]
+        klines = filtered
+    else:
+        # ---- cache 模式：从数据库加载时间窗口内的K线 ----
+        result = await db.execute(
+            select(MarketKline)
+            .where(
+                and_(
+                    MarketKline.exchange == request.exchange,
+                    MarketKline.symbol == request.symbol,
+                    MarketKline.market_type == request.market_type,
+                    MarketKline.interval == request.timeframe,
+                    MarketKline.open_time >= request.start_date,
+                    MarketKline.open_time <= request.end_date,
+                )
+            )
+            .order_by(MarketKline.open_time)
+        )
+        orm_klines = result.scalars().all()
+        klines = [
+            {
+                "open_time": k.open_time,
+                "open": float(k.open) if k.open else 0.0,
+                "high": float(k.high) if k.high else 0.0,
+                "low": float(k.low) if k.low else 0.0,
+                "close": float(k.close) if k.close else 0.0,
+                "volume": float(k.volume) if k.volume else 0.0,
+            }
+            for k in orm_klines
+        ]
 
     if len(klines) < 100:
         return ResponseBase(
@@ -47,26 +165,23 @@ async def run_backtest(
             message=f"K线数据不足，需要至少100根，当前只有{len(klines)}根。请先导入历史数据。",
         )
 
-    # 转换为DataFrame
-    kline_data = [
-        {
-            "open_time": k.open_time,
-            "open": float(k.open) if k.open else 0,
-            "high": float(k.high) if k.high else 0,
-            "low": float(k.low) if k.low else 0,
-            "close": float(k.close) if k.close else 0,
-            "volume": float(k.volume) if k.volume else 0,
-        }
-        for k in klines
-    ]
-    kline_df = pd.DataFrame(kline_data)
-
-    # 适配策略配置
-    strategy_config = adapt_strategy_config(request.strategy_config or {})
+    kline_df = pd.DataFrame(
+        [
+            {
+                "open_time": k["open_time"],
+                "open": k["open"],
+                "high": k["high"],
+                "low": k["low"],
+                "close": k["close"],
+                "volume": k.get("volume", 0.0),
+            }
+            for k in klines
+        ]
+    )
 
     # 创建回测任务记录
     task = BacktestTask(
-        name=request.name,
+        name=task_name,
         symbol=request.symbol,
         exchange=request.exchange,
         market_type=request.market_type,
@@ -89,7 +204,12 @@ async def run_backtest(
             fee_rate=request.fee_rate,
             slippage=request.slippage,
         )
-        bt_result = await engine.run(kline_df, strategy_config)
+        bt_result = await engine.run(
+            kline_df,
+            strategy_config,
+            indicator_keys=get_strategy_indicators(strategy_config),
+            factor_keys=get_strategy_factors(strategy_config),
+        )
 
         # 保存回测交易明细
         for trade in bt_result.get("trades", []):

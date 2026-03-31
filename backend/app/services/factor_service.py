@@ -17,6 +17,8 @@ from sqlalchemy import select, and_, desc
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.factors.registry import FactorRegistry
+from app.services.plugin_runtime_service import get_plugin_runtime_service
+from app.services.market_data_provider import market_data_provider, SourceMode
 from app.models.factor_result import FactorResult
 from app.models.market_kline import MarketKline
 from app.models.market_orderbook_snapshot import MarketOrderbookSnapshot
@@ -47,6 +49,7 @@ async def calculate_factor(
     timeframe: str,
     params: Optional[Dict[str, Any]] = None,
     kline_limit: int = 500,
+    source_mode: SourceMode = "cache",
 ) -> Dict[str, Any]:
     """
     计算指定因子并保存结果。
@@ -80,13 +83,23 @@ async def calculate_factor(
     if factor_cls is None:
         raise ValueError(f"因子未注册: {factor_key}")
 
+    runtime = get_plugin_runtime_service()
+    if not runtime.is_factor_load_enabled(factor_key):
+        raise ValueError(f"因子已禁用（不加载）: {factor_key}")
+
     # 校验参数
     validated_params = factor_cls.validate_params(params or {})
 
     # 构建因子计算所需的数据上下文
     context = await _build_factor_context(
-        db, exchange, symbol, market_type, timeframe,
-        factor_cls.input_type, kline_limit
+        db,
+        exchange,
+        symbol,
+        market_type,
+        timeframe,
+        factor_cls.input_type,
+        kline_limit,
+        source_mode,
     )
 
     logger.info(
@@ -188,6 +201,7 @@ async def _build_factor_context(
     timeframe: str,
     input_types: List[str],
     kline_limit: int,
+    source_mode: SourceMode = "cache",
 ) -> Dict[str, Any]:
     """
     根据因子声明的输入依赖类型，构建计算所需的数据上下文。
@@ -216,102 +230,83 @@ async def _build_factor_context(
 
     # 按因子声明的依赖类型加载对应数据
     if "kline" in input_types:
-        kline_query = (
-            select(MarketKline)
-            .where(
-                and_(
-                    MarketKline.exchange == exchange,
-                    MarketKline.symbol == symbol,
-                    MarketKline.market_type == market_type,
-                    MarketKline.interval == timeframe,
-                )
-            )
-            .order_by(MarketKline.open_time.asc())
-            .limit(kline_limit)
+        klines = await market_data_provider.get_klines(
+            db,
+            exchange=exchange,
+            market_type=market_type,
+            symbol=symbol,
+            interval=timeframe,
+            limit=kline_limit,
+            source_mode=source_mode,
+            persist_to_db=(source_mode == "live"),
         )
-        kline_result = await db.execute(kline_query)
-        klines = list(kline_result.scalars().all())
 
         # 转换为 DataFrame 便于因子计算
-        context["kline"] = pd.DataFrame([
-            {
-                "open_time": k.open_time,
-                "open": float(k.open),
-                "high": float(k.high),
-                "low": float(k.low),
-                "close": float(k.close),
-                "volume": float(k.volume),
-                "quote_volume": float(k.quote_volume),
-                "trade_count": k.trade_count or 0,
-            }
-            for k in klines
-        ])
+        context["kline"] = pd.DataFrame(
+            [
+                {
+                    "open_time": k["open_time"],
+                    "open": k["open"],
+                    "high": k["high"],
+                    "low": k["low"],
+                    "close": k["close"],
+                    "volume": k.get("volume", 0.0),
+                    "quote_volume": k.get("quote_volume", 0.0),
+                    "trade_count": k.get("trade_count", 0),
+                }
+                for k in klines
+            ]
+        )
 
     if "orderbook" in input_types:
-        ob_query = (
-            select(MarketOrderbookSnapshot)
-            .where(
-                and_(
-                    MarketOrderbookSnapshot.exchange == exchange,
-                    MarketOrderbookSnapshot.symbol == symbol,
-                    MarketOrderbookSnapshot.market_type == market_type,
-                )
-            )
-            .order_by(desc(MarketOrderbookSnapshot.snapshot_time))
-            .limit(1)
+        ob = await market_data_provider.get_orderbook(
+            db,
+            exchange=exchange,
+            market_type=market_type,
+            symbol=symbol,
+            source_mode=source_mode,
+            persist_to_db=(source_mode == "live"),
         )
-        ob_result = await db.execute(ob_query)
-        ob = ob_result.scalar_one_or_none()
         context["orderbook"] = {
-            "bids": ob.bids_json if ob else [],
-            "asks": ob.asks_json if ob else [],
-            "snapshot_time": str(ob.snapshot_time) if ob else None,
+            "bids": ob.get("bids", []),
+            "asks": ob.get("asks", []),
+            "snapshot_time": ob.get("snapshot_time"),
         }
 
     if "open_interest" in input_types:
-        oi_query = (
-            select(MarketOpenInterest)
-            .where(
-                and_(
-                    MarketOpenInterest.exchange == exchange,
-                    MarketOpenInterest.symbol == symbol,
-                    MarketOpenInterest.market_type == market_type,
-                )
-            )
-            .order_by(desc(MarketOpenInterest.event_time))
-            .limit(1)
+        oi = await market_data_provider.get_open_interest(
+            db,
+            exchange=exchange,
+            market_type=market_type,
+            symbol=symbol,
+            source_mode=source_mode,
+            persist_to_db=(source_mode == "live"),
         )
-        oi_result = await db.execute(oi_query)
-        oi = oi_result.scalar_one_or_none()
         context["open_interest"] = {
-            "open_interest": float(oi.open_interest) if oi else 0.0,
-            "event_time": str(oi.event_time) if oi else None,
+            "open_interest": oi.get("open_interest", 0.0),
+            "event_time": oi.get("event_time"),
         }
 
     if "trades" in input_types:
-        trades_query = (
-            select(MarketTrade)
-            .where(
-                and_(
-                    MarketTrade.exchange == exchange,
-                    MarketTrade.symbol == symbol,
-                    MarketTrade.market_type == market_type,
-                )
-            )
-            .order_by(desc(MarketTrade.event_time))
-            .limit(200)
+        trades = await market_data_provider.get_trades(
+            db,
+            exchange=exchange,
+            market_type=market_type,
+            symbol=symbol,
+            limit=200,
+            source_mode=source_mode,
         )
-        trades_result = await db.execute(trades_query)
-        trades = list(trades_result.scalars().all())
-        context["trades"] = pd.DataFrame([
-            {
-                "trade_id": t.trade_id,
-                "price": float(t.price),
-                "quantity": float(t.quantity),
-                "side": t.side,
-                "event_time": t.event_time,
-            }
-            for t in trades
-        ])
+        context["trades"] = pd.DataFrame(
+            [
+                {
+                    "trade_id": t["trade_id"],
+                    "price": t["price"],
+                    "quantity": t["quantity"],
+                    "side": t["side"],
+                    "event_time": t["event_time"],
+                }
+                for t in trades
+            ]
+        )
 
     return context

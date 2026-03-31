@@ -135,6 +135,35 @@ class IndicatorRegistry:
         except Exception as e:
             logger.error(f"扫描指标包失败 {package_name}: {e}")
 
+    def unregister_plugin_packages(self) -> int:
+        """
+        Remove indicator classes whose defining module lives under plugin packages.
+
+        Used by hot-reload before rescanning builtins/custom directories.
+
+        Returns:
+            int: Number of indicator keys removed from this registry.
+        """
+        plugin_roots = ("app.indicators.builtins", "app.indicators.custom")
+
+        def _from_plugin(mod: str) -> bool:
+            return any(
+                mod == root or mod.startswith(f"{root}.") for root in plugin_roots
+            )
+
+        to_delete = [
+            key
+            for key, ind_cls in self._indicators.items()
+            if _from_plugin(ind_cls.__module__)
+        ]
+        for key in to_delete:
+            del self._indicators[key]
+        if to_delete:
+            logger.info(
+                f"指标注册中心按插件包卸载 {len(to_delete)} 个: {to_delete}"
+            )
+        return len(to_delete)
+
 
 # ========== 全局指标注册中心单例 ==========
 # 整个应用生命周期内只维护一个注册中心实例

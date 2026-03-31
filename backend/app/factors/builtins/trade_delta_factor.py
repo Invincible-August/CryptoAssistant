@@ -101,6 +101,15 @@ class TradeDeltaFactor(BaseFactor):
         # ---------- 获取K线数据 ----------
         kline_data: List[Dict[str, Any]] = context.get("kline", [])
 
+        # 兼容：FeaturePipeline/单测可能传入 pandas.DataFrame
+        try:
+            import pandas as pd  # type: ignore
+
+            if isinstance(kline_data, pd.DataFrame):
+                kline_data = kline_data.to_dict("records")  # type: ignore[assignment]
+        except Exception:  # noqa: BLE001
+            pass
+
         if len(kline_data) < period:
             return {
                 "buy_volume": 0.0,

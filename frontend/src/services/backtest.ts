@@ -1,12 +1,15 @@
 import request from './request'
 
 export const backtestApi = {
+  listStrategies: () => request.get('/backtest/strategies'),
+
   run: (data: {
-    name: string
+    name?: string
     symbol: string
     exchange?: string
     market_type?: string
     timeframe: string
+    strategy_preset_id?: string
     strategy_config?: Record<string, any>
     start_date: string
     end_date: string

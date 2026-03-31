@@ -4,7 +4,6 @@ import { settingsApi } from '../../services/settings'
 
 const moduleLabels: Record<string, string> = {
   ai: 'AI分析模块',
-  tradingview: 'TradingView模块',
   execution: '执行辅助模块',
   backtest: '回测模块',
   exchange_binance: 'Binance交易所',

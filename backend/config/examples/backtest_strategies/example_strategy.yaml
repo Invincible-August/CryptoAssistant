@@ -1,0 +1,18 @@
+# Copy this file into backend/config/backtest_strategies/ and adjust id/display_name.
+# New files are picked up within a few seconds (mtime cache) without server restart.
+id: example_custom_strategy
+display_name: 示例自定义策略
+description: 演示 YAML 字段；strategy_config 键需与 strategy_adapter.DEFAULT_STRATEGY_CONFIG 兼容。
+strategy_config:
+  warmup_period: 80
+  entry_threshold: 60
+  exit_threshold: 40
+  position_size: 0.15
+  stop_loss_pct: 0.025
+  take_profit_pct: 0.05
+  indicators:
+    - ema
+    - rsi
+  factors:
+    - momentum
+    - volatility

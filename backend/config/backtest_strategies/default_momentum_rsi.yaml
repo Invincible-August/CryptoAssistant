@@ -1,0 +1,18 @@
+# Default backtest preset aligned with BacktestEngine MVP logic (momentum + RSI).
+id: default_momentum_rsi
+display_name: 默认动量 + RSI 策略
+description: 与引擎示例一致：EMA/RSI/MACD 指标 + 动量/波动率因子，阈值可在此调整。
+strategy_config:
+  warmup_period: 60
+  entry_threshold: 65
+  exit_threshold: 35
+  position_size: 0.1
+  stop_loss_pct: 0.02
+  take_profit_pct: 0.04
+  indicators:
+    - ema
+    - rsi
+    - macd
+  factors:
+    - momentum
+    - volatility

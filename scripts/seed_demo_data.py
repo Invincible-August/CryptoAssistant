@@ -30,7 +30,6 @@ async def seed_module_configs(session):
 
     modules = [
         {"module_name": "ai", "enabled": False, "config_json": {"model": "gpt-4"}},
-        {"module_name": "tradingview", "enabled": False, "config_json": {}},
         {"module_name": "execution", "enabled": False, "config_json": {"mode": "simulated"}},
         {"module_name": "backtest", "enabled": True, "config_json": {}},
         {"module_name": "exchange_binance", "enabled": True, "config_json": {"testnet": True}},

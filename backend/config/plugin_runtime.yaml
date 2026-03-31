@@ -1,0 +1,4 @@
+# Runtime plugin toggles (factors / indicators still appear in registry lists;
+# disabled keys are skipped in calculate APIs and feature pipelines).
+disabled_factors: []
+disabled_indicators: []

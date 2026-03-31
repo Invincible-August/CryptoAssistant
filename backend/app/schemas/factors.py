@@ -61,6 +61,20 @@ class FactorMeta(BaseModel):
     )
 
 
+class FactorPluginLoadRequest(BaseModel):
+    """
+    Request body to enable or disable a factor in plugin_runtime.yaml.
+
+    ``load_enabled=False`` adds the key to ``disabled_factors`` (still listed in UI).
+    """
+
+    factor_key: str = Field(..., min_length=1, description="Registered factor_key")
+    load_enabled: bool = Field(
+        ...,
+        description="False = do not run in calculate / pipelines",
+    )
+
+
 class FactorCalcRequest(BaseModel):
     """
     因子计算请求模型

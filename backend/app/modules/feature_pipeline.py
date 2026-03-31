@@ -22,6 +22,7 @@ from loguru import logger
 
 from app.indicators.registry import indicator_registry
 from app.factors.registry import FactorRegistry as factor_registry
+from app.services.plugin_runtime_service import get_plugin_runtime_service
 
 
 class FeaturePipeline:
@@ -93,8 +94,14 @@ class FeaturePipeline:
         """
         indicator_results: Dict[str, pd.DataFrame] = {}
         params_map = params_map or {}
+        runtime = get_plugin_runtime_service()
 
         for indicator_key in self._enabled_indicators:
+            if not runtime.is_indicator_load_enabled(indicator_key):
+                logger.debug(
+                    f"指标 {indicator_key} 在 plugin_runtime 中禁用，跳过管线计算"
+                )
+                continue
             try:
                 # 从注册中心获取指标类（未注册则抛 KeyError）
                 indicator_cls = indicator_registry.get(indicator_key)
@@ -146,8 +153,14 @@ class FeaturePipeline:
         """
         factor_results: Dict[str, Dict] = {}
         params_map = params_map or {}
+        runtime = get_plugin_runtime_service()
 
         for factor_key in self._enabled_factors:
+            if not runtime.is_factor_load_enabled(factor_key):
+                logger.debug(
+                    f"因子 {factor_key} 在 plugin_runtime 中禁用，跳过管线计算"
+                )
+                continue
             try:
                 # 从注册中心获取因子类
                 factor_cls = factor_registry.get(factor_key)

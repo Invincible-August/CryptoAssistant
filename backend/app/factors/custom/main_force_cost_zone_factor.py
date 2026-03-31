@@ -125,6 +125,15 @@ class MainForceCostZoneFactor(BaseFactor):
         # ---------- 获取K线数据 ----------
         kline_data: List[Dict[str, Any]] = context.get("kline", [])
 
+        # 兼容：某些路径传入 pandas.DataFrame
+        try:
+            import pandas as pd  # type: ignore
+
+            if isinstance(kline_data, pd.DataFrame):
+                kline_data = kline_data.to_dict("records")  # type: ignore[assignment]
+        except Exception:  # noqa: BLE001
+            pass
+
         if len(kline_data) < period:
             return cls._default_result()
 
@@ -276,6 +285,7 @@ class MainForceCostZoneFactor(BaseFactor):
 
         return {
             "factor_key": cls.factor_key,
+            "signal_value": score,
             "score": score,
             "direction": direction,
             "weight": cls.score_weight,

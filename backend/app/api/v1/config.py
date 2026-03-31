@@ -33,6 +33,7 @@ async def list_module_configs(
             "updated_at": str(c.updated_at) if c.updated_at else None,
         }
         for c in configs
+        if c.module_name != "tradingview"
     ]
     return ResponseBase(data=data)
 
@@ -45,6 +46,9 @@ async def update_module_config(
     _admin: User = Depends(get_admin_user),
 ):
     """更新指定模块的配置（管理员）"""
+    if module_name == "tradingview":
+        raise HTTPException(status_code=404, detail="TradingView模块已移除")
+
     result = await db.execute(
         select(ModuleConfig).where(ModuleConfig.module_name == module_name)
     )
@@ -76,7 +80,6 @@ async def get_system_config(
             "app_name": settings.APP_NAME,
             "app_env": settings.APP_ENV,
             "module_ai_enabled": settings.MODULE_AI_ENABLED,
-            "module_tradingview_enabled": settings.MODULE_TRADINGVIEW_ENABLED,
             "module_execution_enabled": settings.MODULE_EXECUTION_ENABLED,
             "module_backtest_enabled": settings.MODULE_BACKTEST_ENABLED,
             "binance_testnet": settings.BINANCE_TESTNET,

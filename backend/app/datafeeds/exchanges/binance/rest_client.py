@@ -73,8 +73,18 @@ class BinanceRestClient:
             self._futures_base_url = _FUTURES_BASE_URL
             logger.info("Binance REST 客户端使用正式环境")
 
-        # 创建共享的 httpx 异步客户端，复用 TCP 连接池
+        # httpx 客户端（分别支持“是否走代理”两种模式）。
+        # 这样可以避免不同请求之间相互覆盖代理配置导致的竞态问题。
         self._client: Optional[httpx.AsyncClient] = None
+        self._client_proxy: Optional[httpx.AsyncClient] = None
+
+        # 代理（由你的需求固定为本机 7890 端口）
+        # 当前实现仅用于 REST HTTP 请求；WebSocket 不走该代理。
+        self._proxy_url: str = settings.BINANCE_PROXY_URL
+        self._proxy_config: Dict[str, str] = {
+            "http": self._proxy_url,
+            "https": self._proxy_url,
+        }
         self._timeout = timeout
         self._max_retries = max_retries
         self._base_retry_delay = base_retry_delay
@@ -83,6 +93,8 @@ class BinanceRestClient:
         """
         初始化 HTTP 客户端连接池。
         必须在首次使用前调用，或在 connect() 中调用。
+
+        当前默认初始化“不走代理”的 HTTP 客户端；需要走代理时会在请求阶段延迟创建。
         """
         if self._client is None:
             self._client = httpx.AsyncClient(
@@ -98,14 +110,49 @@ class BinanceRestClient:
                     "X-MBX-APIKEY": settings.BINANCE_API_KEY,
                 },
             )
-            logger.info("Binance REST HTTP 客户端初始化完成")
+            logger.info("Binance REST HTTP 客户端初始化完成（no-proxy）")
+
+    async def _ensure_client(self, *, use_proxy: bool) -> httpx.AsyncClient:
+        """
+        Ensure correct AsyncClient for proxy mode.
+
+        Args:
+            use_proxy: True => use configured HTTP proxy.
+
+        Returns:
+            httpx.AsyncClient instance for the requested proxy mode.
+        """
+        if use_proxy:
+            if self._client_proxy is None:
+                self._client_proxy = httpx.AsyncClient(
+                    timeout=httpx.Timeout(self._timeout),
+                    limits=httpx.Limits(
+                        max_connections=100,
+                        max_keepalive_connections=20,
+                    ),
+                    headers={
+                        "Content-Type": "application/json",
+                        "X-MBX-APIKEY": settings.BINANCE_API_KEY,
+                    },
+                    proxies=self._proxy_config,
+                )
+                logger.info("Binance REST HTTP 客户端初始化完成（proxy）")
+            return self._client_proxy
+
+        # no-proxy
+        if self._client is None:
+            await self.init()
+        return self._client  # type: ignore[return-value]
 
     async def close(self) -> None:
         """关闭 HTTP 客户端，释放连接池资源。"""
         if self._client:
             await self._client.aclose()
             self._client = None
-            logger.info("Binance REST HTTP 客户端已关闭")
+        if self._client_proxy:
+            await self._client_proxy.aclose()
+            self._client_proxy = None
+        logger.info("Binance REST HTTP 客户端已关闭（全部代理模式）")
 
     async def _request(
         self,
@@ -126,12 +173,7 @@ class BinanceRestClient:
             base_url: API 基础地址
             path: 接口路径（如 "/api/v3/klines"）
             params: 查询参数字典
-            use_proxy: 为 True 时为该请求显式解析代理（与 httpx 默认 ``trust_env`` 解耦，避免隐式走系统代理）。
-                仅当 ``use_proxy=True`` 时生效，优先级为：
-                1. 若 ``settings.BINANCE_PROXY_ENABLED`` 为 True 且
-                   ``settings.BINANCE_PROXY_URL``（去空白后）非空，则使用该 URL；
-                2. 否则依次使用环境变量 ``HTTPS_PROXY``、``HTTP_PROXY``。
-                当 ``BINANCE_PROXY_ENABLED`` 为 False 时，忽略应用内 URL，仅使用第 2 步。
+            use_proxy: True => 使用配置的 HTTP 代理访问（REST HTTP 请求专用）
 
         Returns:
             接口返回的 JSON 数据
@@ -140,30 +182,16 @@ class BinanceRestClient:
             RateLimitError: 重试耗尽后仍然被限频
             ExchangeAPIError: 接口返回非预期的错误状态码
         """
-        if not self._client:
-            await self.init()
+        client = await self._ensure_client(use_proxy=use_proxy)
 
         url = f"{base_url}{path}"
         current_retry_delay = self._base_retry_delay
 
-        # use_proxy=True 时按优先级解析代理；与 httpx 默认 trust_env 解耦，避免隐式走系统代理
-        request_proxy: Optional[str] = None
-        if use_proxy:
-            stripped_app_proxy = (settings.BINANCE_PROXY_URL or "").strip()
-            if settings.BINANCE_PROXY_ENABLED and stripped_app_proxy:
-                request_proxy = stripped_app_proxy
-            else:
-                request_proxy = (
-                    os.getenv("HTTPS_PROXY") or os.getenv("HTTP_PROXY")
-                )
-
-        request_kwargs: Dict[str, Any] = {"params": params}
-        if request_proxy:
-            request_kwargs["proxy"] = request_proxy
-
         for attempt in range(1, self._max_retries + 1):
             try:
-                response = await self._client.request(method, url, **request_kwargs)
+                response = await client.request(
+                    method, url, params=params
+                )
 
                 # 请求成功
                 if response.status_code == 200:
@@ -254,6 +282,7 @@ class BinanceRestClient:
         limit: int = 500,
         start_time: Optional[int] = None,
         end_time: Optional[int] = None,
+        use_proxy: bool = False,
     ) -> List[List]:
         """
         获取现货历史K线数据。
@@ -264,6 +293,7 @@ class BinanceRestClient:
             limit: 返回条数，最大1000
             start_time: 起始时间（毫秒时间戳），可选
             end_time: 结束时间（毫秒时间戳），可选
+            use_proxy: True 时通过本地 HTTP 代理访问（仅影响 REST）
 
         Returns:
             K线原始数据数组列表
@@ -279,7 +309,13 @@ class BinanceRestClient:
             params["endTime"] = end_time
 
         logger.debug(f"获取现货K线: {symbol} {interval} limit={limit}")
-        return await self._request("GET", self._spot_base_url, "/api/v3/klines", params)
+        return await self._request(
+            "GET",
+            self._spot_base_url,
+            "/api/v3/klines",
+            params,
+            use_proxy=use_proxy,
+        )
 
     async def get_spot_ticker_24hr(self, symbol: str) -> Dict:
         """
@@ -371,6 +407,7 @@ class BinanceRestClient:
         limit: int = 500,
         start_time: Optional[int] = None,
         end_time: Optional[int] = None,
+        use_proxy: bool = False,
     ) -> List[List]:
         """
         获取U本位合约历史K线数据。
@@ -381,6 +418,7 @@ class BinanceRestClient:
             limit: 返回条数，最大1500
             start_time: 起始时间（毫秒时间戳），可选
             end_time: 结束时间（毫秒时间戳），可选
+            use_proxy: True 时通过本地 HTTP 代理访问（仅影响 REST）
 
         Returns:
             K线原始数据数组列表
@@ -397,7 +435,11 @@ class BinanceRestClient:
 
         logger.debug(f"获取合约K线: {symbol} {interval} limit={limit}")
         return await self._request(
-            "GET", self._futures_base_url, "/fapi/v1/klines", params
+            "GET",
+            self._futures_base_url,
+            "/fapi/v1/klines",
+            params,
+            use_proxy=use_proxy,
         )
 
     async def get_futures_ticker_24hr(self, symbol: str) -> Dict:

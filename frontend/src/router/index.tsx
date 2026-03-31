@@ -45,6 +45,7 @@ export default function AppRouter() {
         <Route path="market-import" element={<MarketImport />} />
         <Route path="indicators" element={<Indicators />} />
         <Route path="factors" element={<Factors />} />
+        <Route path="market-import" element={<MarketImport />} />
         <Route path="backtest" element={<Backtest />} />
         <Route path="ai" element={<AIAnalysis />} />
         <Route path="settings" element={<Settings />} />

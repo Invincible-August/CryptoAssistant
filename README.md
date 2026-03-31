@@ -10,7 +10,7 @@
 - **行为分析引擎** - 评分引擎 + 威科夫理论假设引擎 + 交易建议生成
 - **K线级回测** - 完整绩效指标（收益率/回撤/胜率/夏普比率）
 - **AI分析模块** - OpenAI集成，市场分析和指标/因子建议（独立模块）
-- **TradingView集成** - Webhook信号接入（独立模块）
+- （已移除）TradingView集成 - Webhook信号接入
 - **执行辅助** - 模拟/真实下单，拆单/阶梯挂单（默认关闭）
 - **Web可视化** - React + Ant Design暗色主题，11个管理页面（含「导入行情」异步任务）
 - **权限管理** - JWT认证 + RBAC（管理员/普通用户）
@@ -44,6 +44,22 @@ copy .env.example .env
 ```
 
 可选：若需在受限网络下通过代理拉取 Binance 历史行情（REST 层 `use_proxy=True`），在 `use_proxy=True` 时解析顺序为：`BINANCE_PROXY_ENABLED=true` 且 `BINANCE_PROXY_URL` 非空则优先使用该 URL（代码默认 `http://127.0.0.1:7890`，可在 `.env` 覆盖），否则使用环境变量 `HTTPS_PROXY` / `HTTP_PROXY`；`BINANCE_PROXY_ENABLED=false` 时忽略应用内 URL，仅使用环境变量。
+
+### 2.1 （可选）Binance 代理配置（内网/中国大陆网络常用）
+
+如果你无法直接访问 Binance，可在 `.env` 中配置：
+
+```bash
+BINANCE_PROXY_ENABLED=true
+BINANCE_PROXY_URL=http://127.0.0.1:7890
+```
+
+该配置会同时影响 WebSocket（K 线/逐笔/深度/标记价格）与 REST（图表页 `live` 拉取 K 线）。
+
+### 2.2 Binance 测试网开关（默认主网）
+
+如果你使用实际交易/实时行情，建议保持默认的 `BINANCE_TESTNET=false`。
+当前代码默认主网；如你确实需要测试网，请自行验证 WebSocket 地址在你网络环境下是否可用。
 
 ### 3. 初始化数据库
 
@@ -112,8 +128,8 @@ TradingAgent/
 ├── backend/                    # 后端（Python/FastAPI）
 │   ├── app/
 │   │   ├── main.py            # 应用入口
-│   │   ├── api/v1/            # API路由（14组）
-│   │   ├── core/              # 核心配置/安全/数据库/Redis
+│   │   ├── api/v1/            # API 路由（含 admin 插件热重载）
+│   │   ├── core/              # 核心配置/安全/数据库/Redis/热重载
 │   │   ├── models/            # 数据库模型（23张表）
 │   │   ├── schemas/           # Pydantic请求/响应模型
 │   │   ├── services/          # 业务逻辑层
@@ -122,11 +138,12 @@ TradingAgent/
 │   │   ├── factors/           # 量化因子插件系统
 │   │   ├── datafeeds/         # Binance数据源适配器
 │   │   ├── ai/                # AI分析模块
-│   │   ├── tradingview/       # TradingView集成
+│   │   ├── lightweight_charts_compat/  # 图表格式兼容映射层（Lightweight Charts）
 │   │   ├── backtest/          # 回测引擎
 │   │   ├── execution/         # 执行辅助模块
 │   │   ├── tasks/             # 定时任务
 │   │   └── utils/             # 工具函数
+│   ├── config/                # plugin_runtime.yaml、backtest_strategies/*.yaml
 │   └── requirements.txt
 ├── frontend/                   # 前端（React/TypeScript）
 │   ├── src/
@@ -140,6 +157,7 @@ TradingAgent/
 │   └── nginx.conf             # Nginx反向代理（可选，生产部署用）
 ├── docs/                       # 项目文档（中文）
 │   ├── 开发指南.md             # 二次开发：结构、API 映射、扩展步骤
+│   ├── 图表分析开发指南.md      # 图表模块：文件/函数、前后端 API、数据落库说明
 ├── scripts/                    # 脚本工具（启动/初始化）
 ├── DEPLOY_GUIDE.md             # 完整部署指南（Windows + Linux）
 ├── tests/                      # 测试代码
@@ -151,9 +169,39 @@ TradingAgent/
 | 模块 | 环境变量 | 默认 |
 |------|---------|------|
 | AI分析 | MODULE_AI_ENABLED | false |
-| TradingView | MODULE_TRADINGVIEW_ENABLED | false |
+| TradingView（已移除） | - | - |
 | 执行辅助 | MODULE_EXECUTION_ENABLED | false |
 | 回测 | MODULE_BACKTEST_ENABLED | true |
+| 插件热重载 API | PLUGIN_HOT_RELOAD_ENABLED | true（生产可设 false） |
+
+## 插件运行时配置（因子/指标「不加载」）
+
+- 配置文件：`backend/config/plugin_runtime.yaml`（仓库内提供空列表默认；可复制 `backend/config/examples/plugin_runtime.example.yaml` 参考）。
+- 字段：`disabled_factors`、`disabled_indicators`（字符串列表）。列入其中的插件仍会出现在列表 API，但 `load_enabled=false`，且 **计算接口** 与 **FeaturePipeline** 会跳过。
+- 管理 API（需 **admin** 角色）：`PATCH /api/v1/factors/runtime/load-enabled`、`PATCH /api/v1/indicators/runtime/load-enabled`，请求体 `{ "factor_key"|"indicator_key", "load_enabled": true/false }`。
+- 前端：因子页 / 指标页表格「加载」列；管理员可对单行「不加载 / 恢复」；指标页另有「重载插件」按钮（见下）。
+
+## 回测策略预设（YAML）
+
+- 目录：`backend/config/backtest_strategies/*.yaml`（示例见 `backend/config/examples/backtest_strategies/example_strategy.yaml`）。
+- 每个文件字段：`id`、`display_name`、`description`（可选）、`strategy_config`（与 `app/backtest/strategy_adapter.py` 中默认键兼容，如 `warmup_period`、`indicators`、`factors` 等）。
+- `GET /api/v1/backtest/strategies`：列出预设（短时 mtime 缓存，一般无需重启即可看到新文件）。
+- `POST /api/v1/backtest/run`：传 `strategy_preset_id`（对应 YAML 的 `id`）；可选同传 `strategy_config` 与预设 **深度合并**（请求体覆盖叶子字段）。未传 `name` 时使用预设的 `display_name`。仍需传 `symbol`、`exchange`、`market_type`、`timeframe`、`start_date`、`end_date` 等；K 线查询已按交易所与市场类型过滤。
+- 前端回测页使用「回测策略」下拉框，提交 `strategy_preset_id` 与上述字段。
+
+## 插件热重载（Python 插件）
+
+- `POST /api/v1/admin/plugins/reload`（**admin** + `PLUGIN_HOT_RELOAD_ENABLED=true`）：从 `sys.modules` 卸载 `app.indicators.{builtins,custom}` 与 `app.factors.{builtins,custom}` 下已加载模块，按 `__module__` 清理注册表后重新扫描注册。
+- 若自定义模块之间存在复杂相互 import，可能需要连续重载一次或重启进程；详见 `app/core/plugin_hot_reload.py` 注释。
+
+## 图表分析（K 线 + 可选指标）
+
+- **后端**：`GET /api/v1/chart/bundle`（需登录），查询参数：`symbol`、`timeframe`、`exchange`、`market_type`、`limit`、`indicators`（逗号分隔指标 key，留空则仅 K 线）。返回 `config`、`candlestick`、`overlays`、`subcharts`、`meta`（含 `failed_indicators`）。
+  - 新增：`source_mode=cache|live`（默认 `cache`）与 `force_refresh=true`（等价别名，等价于 `source_mode=live`）
+  - 新增：`use_proxy=true|false`（默认 `false`）。当 `source_mode=live` 且 `exchange=binance` 时，可通过本地 HTTP 代理访问 Binance REST 接口（用于网络受限环境）。
+  - `live` 模式由 `MarketDataProvider` 走交易所实时拉取并回写缓存（当前仅 `binance` adapter 已实现；OKX/Bitget 需后续补充适配器）
+- **与 TradingView 模块的关系**：TradingView webhook 与 `TradingView` 兼容接口已移除；本接口仅返回 Lightweight Charts 数据包。
+- **前端**：`/chart` 页面使用 `lightweight-charts` 渲染；需已导入 K 线数据（如 `scripts/seed_demo_data.py`）。
 
 ## 自定义指标示例
 
@@ -177,7 +225,7 @@ class MyIndicator(BaseIndicator):
 
 ## 二次开发
 
-扩展功能、补全页面或对接新业务时，请先阅读 **[docs/开发指南.md](./docs/开发指南.md)**：其中说明仓库分层、14 组 API 与前端路由对应关系、请求链路、常见扩展步骤（新接口 / 新页面 / 新指标与因子），并标注了部分页面仍为占位实现（如图表页），便于排期与分工。
+扩展功能、补全页面或对接新业务时，请先阅读 **[docs/开发指南.md](./docs/开发指南.md)**：其中说明仓库分层、API 与前端路由对应关系、请求链路、常见扩展步骤（新接口 / 新页面 / 新指标与因子）。**图表分析**模块的逐文件说明（含函数级与数据是否落库）见 **[docs/图表分析开发指南.md](./docs/图表分析开发指南.md)**。
 
 ## 详细部署指南
 

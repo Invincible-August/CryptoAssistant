@@ -14,6 +14,7 @@ from app.core.exceptions import AppException
 from app.api.router import api_router
 from app.indicators import register_all_indicators
 from app.factors import register_all_factors
+from app.datafeeds.runtime import init_datafeeds
 from loguru import logger
 
 
@@ -42,6 +43,12 @@ async def lifespan(app: FastAPI):
     register_all_indicators()
     register_all_factors()
     logger.info("指标和因子插件注册完成")
+
+    # 初始化交易所数据源（用于实时拉取 A 模式）
+    try:
+        await init_datafeeds()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("数据源初始化失败，系统仍可使用缓存模式: %s", exc)
 
     logger.info(f"系统启动完成 - 访问 http://{settings.APP_HOST}:{settings.APP_PORT}/docs 查看API文档")
 

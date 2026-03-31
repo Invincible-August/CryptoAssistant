@@ -14,6 +14,7 @@ import {
   FileTextOutlined,
   UserOutlined,
   LogoutOutlined,
+  UploadOutlined,
 } from '@ant-design/icons'
 import { useAuthStore } from '../store/auth'
 import { authApi } from '../services/auth'

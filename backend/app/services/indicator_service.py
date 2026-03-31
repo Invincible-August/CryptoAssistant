@@ -17,6 +17,8 @@ from sqlalchemy import select, and_, desc
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.indicators.registry import indicator_registry
+from app.services.plugin_runtime_service import get_plugin_runtime_service
+from app.services.market_data_provider import market_data_provider, SourceMode
 from app.models.indicator_definition import IndicatorDefinition
 from app.models.indicator_result import IndicatorResult
 from app.models.market_kline import MarketKline
@@ -45,6 +47,7 @@ async def calculate_indicator(
     timeframe: str,
     params: Optional[Dict[str, Any]] = None,
     limit: int = 500,
+    source_mode: SourceMode = "cache",
 ) -> Dict[str, Any]:
     """
     计算指定技术指标并保存结果。
@@ -73,29 +76,27 @@ async def calculate_indicator(
         KeyError: 指标未在注册中心注册
         ValueError: 参数校验失败或无可用K线数据
     """
+    runtime = get_plugin_runtime_service()
+    if not runtime.is_indicator_load_enabled(indicator_key):
+        raise ValueError(f"指标已禁用（不加载）: {indicator_key}")
+
     # 从注册中心获取指标类（不存在会抛出 KeyError）
     indicator_cls = indicator_registry.get(indicator_key)
 
     # 校验并补全参数
     validated_params = indicator_cls.validate_params(params or {})
 
-    # 加载历史K线数据
-    query = (
-        select(MarketKline)
-        .where(
-            and_(
-                MarketKline.exchange == exchange,
-                MarketKline.symbol == symbol,
-                MarketKline.market_type == market_type,
-                MarketKline.interval == timeframe,
-            )
-        )
-        .order_by(MarketKline.open_time.asc())
-        .limit(limit)
+    # 加载历史K线数据（cache/live 统一入口）
+    klines = await market_data_provider.get_klines(
+        db,
+        exchange=exchange,
+        market_type=market_type,
+        symbol=symbol,
+        interval=timeframe,
+        limit=limit,
+        source_mode=source_mode,
+        persist_to_db=(source_mode == "live"),
     )
-
-    result = await db.execute(query)
-    klines = list(result.scalars().all())
 
     if not klines:
         raise ValueError(
@@ -103,19 +104,21 @@ async def calculate_indicator(
         )
 
     # 将 ORM 对象转换为 pandas DataFrame，供指标计算使用
-    kline_df = pd.DataFrame([
-        {
-            "open_time": k.open_time,
-            "open": float(k.open),
-            "high": float(k.high),
-            "low": float(k.low),
-            "close": float(k.close),
-            "volume": float(k.volume),
-            "quote_volume": float(k.quote_volume),
-            "trade_count": k.trade_count or 0,
-        }
-        for k in klines
-    ])
+    kline_df = pd.DataFrame(
+        [
+            {
+                "open_time": k["open_time"],
+                "open": k["open"],
+                "high": k["high"],
+                "low": k["low"],
+                "close": k["close"],
+                "volume": k.get("volume", 0.0),
+                "quote_volume": k.get("quote_volume", 0.0),
+                "trade_count": k.get("trade_count", 0),
+            }
+            for k in klines
+        ]
+    )
 
     logger.info(
         f"开始计算指标: {indicator_key}，"

@@ -100,3 +100,9 @@ class SMAIndicator(BaseIndicator):
         })
 
         return result_df
+
+
+# ---- Compatibility alias ----
+# Some test/code paths import `MAIndicator` instead of `SMAIndicator`.
+# Keep it as an alias so registration and runtime behavior remain unchanged.
+MAIndicator = SMAIndicator
