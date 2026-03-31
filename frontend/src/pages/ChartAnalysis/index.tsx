@@ -67,7 +67,7 @@ export default function ChartAnalysis() {
   const [timeframe, setTimeframe] = useState('1h')
   const [exchange, setExchange] = useState('binance')
   const [useProxy, setUseProxy] = useState(false)
-  const [indicatorKeys, setIndicatorKeys] = useState<string[]>(['ema', 'rsi'])
+  const [indicatorKeys, setIndicatorKeys] = useState<string[]>(['ema'])
   const [bundle, setBundle] = useState<ChartBundle | null>(null)
   const [loading, setLoading] = useState(false)
   const [meta, setMeta] = useState<ChartBundle['meta'] | null>(null)
